@@ -1,0 +1,139 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: wegis_postgres
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    networks:
+      - wegis_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-phishing_data}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: wegis_redis
+    command: redis-server --appendonly yes --requirepass ""
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - wegis_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MongoDB Database
+  mongodb:
+    image: mongo:7
+    container_name: wegis_mongodb
+    env_file:
+      - .env
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGODB_NAME}
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - ./mongo-init:/docker-entrypoint-initdb.d
+    networks:
+      - wegis_network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Initialization
+  redis-init:
+    image: redis:7-alpine
+    container_name: wegis_redis_init
+    networks:
+      - wegis_network
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: |
+      sh -c '
+        echo "Initializing Redis with default domain lists..."
+
+        echo "Adding whitelist domains..."
+        redis-cli -h redis -p 6379 SADD "wegis:whitelist:domains" \
+          "google.com" "amazon.com" "microsoft.com" "apple.com" \
+          "facebook.com" "instagram.com" "twitter.com" "linkedin.com" \
+          "github.com" "stackoverflow.com" "wikipedia.org" "youtube.com" \
+          "netflix.com" "cnn.com" "bbc.com" "nytimes.com" "reddit.com" \
+          "openai.com" "naver.com" "daum.net" "kakao.com" "samsung.com" "lg.com"
+
+        echo "Adding whitelist patterns..."
+        redis-cli -h redis -p 6379 SADD "wegis:whitelist:patterns" \
+          "*.google.com" "*.amazon.com" "*.microsoft.com" "*.apple.com" \
+          "*.github.com" "*.stackoverflow.com" "*.wikipedia.org" \
+          "*.youtube.com" "*.naver.com" "*.kakao.com"
+
+        echo "Initializing empty blacklist keys..."
+        redis-cli -h redis -p 6379 SADD "wegis:blacklist:domains" "__placeholder__"
+        redis-cli -h redis -p 6379 SREM "wegis:blacklist:domains" "__placeholder__"
+        redis-cli -h redis -p 6379 SADD "wegis:blacklist:patterns" "__placeholder__"
+        redis-cli -h redis -p 6379 SREM "wegis:blacklist:patterns" "__placeholder__"
+
+        echo "Redis initialization completed!"
+        echo "Whitelist domains count: $(redis-cli -h redis -p 6379 SCARD wegis:whitelist:domains)"
+        echo "Whitelist patterns count: $(redis-cli -h redis -p 6379 SCARD wegis:whitelist:patterns)"
+        echo "Blacklist keys initialized (empty)"
+      '
+    restart: "no"
+
+  # Wegis Server (for development)
+  wegis-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wegis_server
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models
+      - ./log:/app/log
+    networks:
+      - wegis_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      redis-init:
+        condition: service_completed_successfully
+    command: ["uvicorn", "src.server:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+networks:
+  wegis_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  mongodb_data:

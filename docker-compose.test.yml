@@ -1,0 +1,62 @@
+services:
+  # PostgreSQL for Testing
+  postgres-test:
+    image: postgres:15-alpine
+    container_name: wegis_postgres_test
+    environment:
+      POSTGRES_USER: test_admin
+      POSTGRES_PASSWORD: test_password
+      POSTGRES_DB: test_phishing_data
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
+    ports:
+      - "5433:5432"
+    networks:
+      - wegis_test_network
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test_admin -d test_phishing_data"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  # Redis for Testing
+  redis-test:
+    image: redis:7-alpine
+    container_name: wegis_redis_test
+    command: redis-server --appendonly no
+    ports:
+      - "6380:6379"
+    networks:
+      - wegis_test_network
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  # MongoDB for Testing
+  mongodb-test:
+    image: mongo:7
+    container_name: wegis_mongodb_test
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: test_admin
+      MONGO_INITDB_ROOT_PASSWORD: test_password
+      MONGO_INITDB_DATABASE: test_phishing_feedback
+    ports:
+      - "27018:27017"
+    networks:
+      - wegis_test_network
+    tmpfs:
+      - /data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+networks:
+  wegis_test_network:
+    driver: bridge

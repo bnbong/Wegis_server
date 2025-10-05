@@ -36,7 +36,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
     SECRET_KEY: str = secrets.token_urlsafe(32)
-    ENVIRONMENT: Literal["development", "production"] = "development"
+    ENVIRONMENT: Literal["development", "production", "test"] = "development"
 
     CLIENT_ORIGIN: str = ""
     BACKEND_CORS_ORIGINS: Annotated[
@@ -52,7 +52,31 @@ class Settings(BaseSettings):
 
     PROJECT_NAME: str = "Wegis Server"
     MODEL_NAME: str = "best_acc_model.pt"
-    MODEL_PATH: str = os.path.join(os.path.dirname(__file__), MODEL_NAME)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def MODEL_PATH(self) -> str:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+
+        search_paths = [
+            os.path.join(current_dir, "..", "..", "models", self.MODEL_NAME),
+            os.path.join(current_dir, "..", self.MODEL_NAME),
+            os.path.join(current_dir, "..", "..", self.MODEL_NAME),
+        ]
+
+        for path in search_paths:
+            normalized_path = os.path.normpath(path)
+            if os.path.exists(normalized_path) and os.path.isfile(normalized_path):
+                return normalized_path
+
+        searched_locations = "\n".join(
+            [f"  - {os.path.normpath(p)}" for p in search_paths]
+        )
+        raise FileNotFoundError(
+            f"AI model checkpoint file '{self.MODEL_NAME}' not found.\n"
+            f"Searched locations:\n{searched_locations}\n"
+            f"Please ensure the model file exists in the 'models/' directory."
+        )
 
     HTML_LOAD_TIMEOUT: int = int(os.getenv("HTML_LOAD_TIMEOUT", "20"))
     HTML_LOAD_RETRIES: int = int(os.getenv("HTML_LOAD_RETRIES", "2"))
@@ -60,11 +84,14 @@ class Settings(BaseSettings):
     CHROME_BIN: str = "/usr/bin/chromium"
     CHROMEDRIVER_PATH: str = "/usr/bin/chromedriver"
 
+    DOMAIN_ENABLE_PATTERNS: bool = True
+
     # Redis
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379
     REDIS_DB: int = 0
     REDIS_CACHE_TTL: int = int(os.getenv("REDIS_CACHE_TTL", "43200"))
+    REDIS_NAMESPACE: str = "wegis"
     REDIS_MAX_CONNECTIONS: int = 10
     REDIS_RETRY_ON_TIMEOUT: bool = True
     REDIS_SOCKET_TIMEOUT: int = 5
@@ -103,7 +130,7 @@ class Settings(BaseSettings):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def MONGODB_URI(self) -> str:
-        return f"mongodb://{self.MONGODB_USER}:{self.MONGODB_PASSWORD}@{self.MONGODB_HOST}:{self.MONGODB_PORT}/{self.MONGODB_NAME}?maxPoolSize={self.MONGODB_MAX_POOL_SIZE}&minPoolSize={self.MONGODB_MIN_POOL_SIZE}&serverSelectionTimeoutMS={self.MONGODB_SERVER_SELECTION_TIMEOUT}"
+        return f"mongodb://{self.MONGODB_USER}:{self.MONGODB_PASSWORD}@{self.MONGODB_HOST}:{self.MONGODB_PORT}/{self.MONGODB_NAME}?authSource=admin&maxPoolSize={self.MONGODB_MAX_POOL_SIZE}&minPoolSize={self.MONGODB_MIN_POOL_SIZE}&serverSelectionTimeoutMS={self.MONGODB_SERVER_SELECTION_TIMEOUT}"
 
     MAX_CONCURRENT_REQUESTS: int = 5
     MODEL_CACHE_SIZE: int = 1
