@@ -8,3 +8,23 @@ repos:
     -   id: end-of-file-fixer
     -   id: check-yaml
     -   id: check-added-large-files
+
+-   repo: https://github.com/charliermarsh/ruff-pre-commit
+    rev: v0.2.2
+    hooks:
+      - id: ruff
+        args:
+          - --fix
+      - id: ruff-format
+
+-   repo: local
+    hooks:
+      - id: pytest-unit
+        name: Run unit tests (fast)
+        entry: python -m pytest tests/ -v -m "not integration" --tb=short
+        language: system
+        types: [python]
+        pass_filenames: false
+        always_run: false
+        stages: [pre-commit]
+        verbose: true
