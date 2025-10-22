@@ -112,7 +112,7 @@ services:
     env_file:
       - .env
     ports:
-      - "8000:8000"
+      - "9000:9000"
     volumes:
       - ./models:/app/models
       - ./log:/app/log
@@ -127,7 +127,7 @@ services:
         condition: service_healthy
       redis-init:
         condition: service_completed_successfully
-    command: ["uvicorn", "src.server:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command: ["uvicorn", "src.server:app", "--host", "0.0.0.0", "--port", "9000", "--reload"]
 
 networks:
   wegis_network:

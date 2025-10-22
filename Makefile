@@ -15,8 +15,8 @@ up: ## Start all services in development mode
 	@echo "Services are starting up..."
 	@echo "Waiting for health checks to pass..."
 	@docker-compose ps
-	@echo "Server will be available at http://localhost:8000"
-	@echo "API docs at http://localhost:8000/docs"
+	@echo "Server will be available at http://localhost:9000"
+	@echo "API docs at http://localhost:9000/docs"
 
 up-logs: ## Start all services and follow logs
 	docker-compose up
