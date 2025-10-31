@@ -20,7 +20,7 @@ logger = logging.getLogger("main")
 router = APIRouter(prefix="/feedback", tags=["feedback"])
 
 
-def save_feedback(
+async def save_feedback(
     feedback: UserFeedbackRequest, db_manager: Optional[DBManager] = None
 ) -> Dict[str, Any]:
     """Save user feedback"""
@@ -39,19 +39,19 @@ def save_feedback(
         metadata=feedback.metadata,  # Save rating etc.
     )
 
-    feedback_id = db_manager.save_user_feedback(user_feedback)
+    feedback_id = await db_manager.save_user_feedback(user_feedback)
 
     return {"feedback_id": feedback_id, "status": "success"}
 
 
 @router.post("/feedback", response_model=ResponseSchema[dict])
-def submit_feedback(
+async def submit_feedback(
     data: UserFeedbackRequest, db_manager: DBManager = Depends(get_db_manager)
 ):
     """
     Submit user feedback endpoint
     """
-    result = save_feedback(data, db_manager=db_manager)
+    result = await save_feedback(data, db_manager=db_manager)
     response: ResponseSchema[dict] = ResponseSchema(
         timestamp=datetime.now().isoformat(),
         message=ResponseMessage.SUCCESS,
