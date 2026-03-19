@@ -125,158 +125,72 @@ class AnalyzerService:
         legacy_result.setdefault("infer_ms", 0.0)
         return legacy_result
 
-    async def _analyze_baseline(
+    async def analyze(
         self,
-        canonical_url: str,
+        url: str,
         request: Request,
-        response_model: Type[PhishingDetectionResponse],
-        db_manager: DBManager,
+        response_model: Type[PhishingDetectionResponse] = PhishingDetectionResponse,
+        db_manager: Optional[DBManager] = None,
     ) -> PhishingDetectionResponse:
-        detector = request.app.state.model
-        timer = StageTimer()
+        canonical_url = canonicalize_url(url)
+        logger.info(f"Analyzing URL: {url} (canonical: {canonical_url})")
 
-        timer.start("cache_lookup")
-        cached_result = await db_manager.get_cached_result(canonical_url)
-        timer.stop("cache_lookup")
-        if cached_result:
-            record = build_perf_record(
-                url=canonical_url,
-                source="cache",
-                timer=timer,
-                fetch_mode="none",
-                cache_hit=True,
-                scenario="baseline",
-            )
-            log_perf_record(record)
-            return response_model.model_validate(
-                {
-                    "url": canonical_url,
-                    "result": cached_result["is_phishing"],
-                    "confidence": cached_result["confidence"],
-                    "source": "cache",
-                    "fetch_mode": "none",
-                }
-            )
+        redis_client = await get_redis()
+        domain_checker = DomainChecker(redis_client)
 
-        if not self._has_real_predict_from_html(detector):
-            model_result = await asyncio.to_thread(detector.predict, canonical_url)
-            if model_result.get("confidence") is None:
-                return response_model.model_validate(
-                    {
-                        "url": canonical_url,
-                        "result": False,
-                        "confidence": 0.0,
-                        "source": "error",
-                        "fetch_mode": "none",
-                    }
-                )
-
-            await self._persist_result(
-                db_manager=db_manager,
-                url=canonical_url,
-                result=bool(model_result["result"]),
-                confidence=float(model_result["confidence"]),
-                html_content=None,
-                timer=timer,
-            )
-
-            return response_model.model_validate(
-                {
-                    "url": canonical_url,
-                    "result": bool(model_result["result"]),
-                    "confidence": float(model_result["confidence"]),
-                    "source": "model",
-                    "fetch_mode": "none",
-                }
-            )
-
-        timer.start("html_fetch")
-        html_for_infer, fetch_mode = await self._fetch_html_once(canonical_url)
-        timer.stop("html_fetch")
-        if not html_for_infer:
+        if await domain_checker.is_whitelisted(canonical_url):
+            logger.info(f"URL {canonical_url} is in whitelist")
             return response_model.model_validate(
                 {
                     "url": canonical_url,
                     "result": False,
-                    "confidence": 0.0,
-                    "source": "error",
-                    "fetch_mode": fetch_mode,
-                }
-            )
-
-        async with self.infer_semaphore:
-            model_result = await self._predict_model(
-                detector,
-                canonical_url,
-                html_for_infer,
-            )
-
-        timer.stages["preprocess"] = model_result.get("preprocess_ms", 0.0)
-        timer.stages["inference"] = model_result.get("infer_ms", 0.0)
-
-        await self._persist_result(
-            db_manager=db_manager,
-            url=canonical_url,
-            result=bool(model_result["result"]),
-            confidence=float(model_result["confidence"]),
-            html_content=html_for_infer,
-            timer=timer,
-        )
-
-        record = build_perf_record(
-            url=canonical_url,
-            source="model",
-            timer=timer,
-            fetch_mode=fetch_mode,
-            cache_hit=False,
-            scenario="baseline",
-        )
-        log_perf_record(record)
-
-        return response_model.model_validate(
-            {
-                "url": canonical_url,
-                "result": bool(model_result["result"]),
-                "confidence": float(model_result["confidence"]),
-                "source": "model",
-                "fetch_mode": fetch_mode,
-            }
-        )
-
-    async def _analyze_optimized(
-        self,
-        canonical_url: str,
-        request: Request,
-        response_model: Type[PhishingDetectionResponse],
-        db_manager: DBManager,
-    ) -> PhishingDetectionResponse:
-        detector = request.app.state.model
-        timer = StageTimer()
-
-        timer.start("cache_lookup")
-        cached_result = await db_manager.get_cached_result(canonical_url)
-        timer.stop("cache_lookup")
-        if cached_result:
-            record = build_perf_record(
-                url=canonical_url,
-                source="cache",
-                timer=timer,
-                fetch_mode="none",
-                cache_hit=True,
-                scenario="optimized",
-            )
-            log_perf_record(record)
-            return response_model.model_validate(
-                {
-                    "url": canonical_url,
-                    "result": cached_result["is_phishing"],
-                    "confidence": cached_result["confidence"],
-                    "source": "cache",
+                    "confidence": 0.01,
+                    "source": "whitelist",
                     "fetch_mode": "none",
                 }
             )
 
+        if await domain_checker.is_blacklisted(canonical_url):
+            logger.info(f"URL {canonical_url} is in blacklist")
+            return response_model.model_validate(
+                {
+                    "url": canonical_url,
+                    "result": True,
+                    "confidence": 0.99,
+                    "source": "blacklist",
+                    "fetch_mode": "none",
+                }
+            )
+
+        if db_manager is None:
+            db_manager = DBManager()
+
+        detector = request.app.state.model
+        timer = StageTimer()
+
         async def run_pipeline() -> PhishingDetectionResponse:
+            timer.start("cache_lookup")
+            cached_result = await db_manager.get_cached_result(canonical_url)
+            timer.stop("cache_lookup")
+            if cached_result:
+                record = build_perf_record(
+                    url=canonical_url,
+                    source="cache",
+                    timer=timer,
+                    fetch_mode="none",
+                    cache_hit=True,
+                )
+                log_perf_record(record)
+                return response_model.model_validate(
+                    {
+                        "url": canonical_url,
+                        "result": cached_result["is_phishing"],
+                        "confidence": cached_result["confidence"],
+                        "source": "cache",
+                        "fetch_mode": "none",
+                    }
+                )
+
             if not self._has_real_predict_from_html(detector):
                 model_result = await asyncio.to_thread(detector.predict, canonical_url)
                 if model_result.get("confidence") is None:
@@ -305,7 +219,6 @@ class AnalyzerService:
                     timer=timer,
                     fetch_mode="none",
                     cache_hit=False,
-                    scenario="optimized",
                 )
                 log_perf_record(record)
 
@@ -369,7 +282,6 @@ class AnalyzerService:
                 timer=timer,
                 fetch_mode=fetch_mode,
                 cache_hit=False,
-                scenario="optimized",
             )
             log_perf_record(record)
 
@@ -384,63 +296,3 @@ class AnalyzerService:
             )
 
         return await self._run_inflight_deduplicated(canonical_url, run_pipeline)
-
-    async def analyze(
-        self,
-        url: str,
-        request: Request,
-        response_model: Type[PhishingDetectionResponse] = PhishingDetectionResponse,
-        db_manager: Optional[DBManager] = None,
-        pipeline_mode: str = "optimized",
-    ) -> PhishingDetectionResponse:
-        canonical_url = canonicalize_url(url)
-        logger.info(f"Analyzing URL: {url} (canonical: {canonical_url})")
-
-        # Redis-based whitelist/blacklist check
-        redis_client = await get_redis()
-        domain_checker = DomainChecker(redis_client)
-
-        # Check whitelist
-        if await domain_checker.is_whitelisted(canonical_url):
-            logger.info(f"URL {canonical_url} is in whitelist")
-            return response_model.model_validate(
-                {
-                    "url": canonical_url,
-                    "result": False,
-                    "confidence": 0.01,
-                    "source": "whitelist",
-                    "fetch_mode": "none",
-                }
-            )
-
-        # Check blacklist
-        if await domain_checker.is_blacklisted(canonical_url):
-            logger.info(f"URL {canonical_url} is in blacklist")
-            return response_model.model_validate(
-                {
-                    "url": canonical_url,
-                    "result": True,
-                    "confidence": 0.99,
-                    "source": "blacklist",
-                    "fetch_mode": "none",
-                }
-            )
-
-        # If DB manager is not provided, create a new one
-        if db_manager is None:
-            db_manager = DBManager()
-
-        if pipeline_mode == "baseline":
-            return await self._analyze_baseline(
-                canonical_url=canonical_url,
-                request=request,
-                response_model=response_model,
-                db_manager=db_manager,
-            )
-
-        return await self._analyze_optimized(
-            canonical_url=canonical_url,
-            request=request,
-            response_model=response_model,
-            db_manager=db_manager,
-        )

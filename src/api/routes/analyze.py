@@ -28,11 +28,8 @@ router = APIRouter(prefix="/analyze", tags=["analyze"])
 
 
 @router.get("/perf/records")
-async def get_perf_records(
-    scenario: str = Query("", description="Filter by scenario: baseline or optimized"),
-):
-    target = scenario or None
-    records = await perf_store.list(target)
+async def get_perf_records():
+    records = await perf_store.list()
     return {
         "timestamp": datetime.now().isoformat(),
         "count": len(records),
@@ -104,7 +101,6 @@ async def check_legacy():
 async def check_url(
     request_data: PhishingDetectionRequest,
     request: Request,
-    pipeline_mode: str = Query("optimized", pattern="^(optimized|baseline)$"),
     db_manager: DBManager = Depends(get_db_manager),
 ):
     """
@@ -115,7 +111,6 @@ async def check_url(
         url=request_data.url,
         request=request,
         db_manager=db_manager,
-        pipeline_mode=pipeline_mode,
     )
 
     response: ResponseSchema[PhishingDetectionResponse] = ResponseSchema(
@@ -130,13 +125,11 @@ async def check_url(
 async def check_urls_batch(
     urls: List[str],
     request: Request,
-    pipeline_mode: str = Query("optimized", pattern="^(optimized|baseline)$"),
     db_manager: DBManager = Depends(get_db_manager),
 ):
     """
     Batch URL phishing detection endpoint for browser extensions
     """
-
     analyzer = getattr(request.app.state, "analyzer_service", None) or AnalyzerService()
 
     async def analyze_single_url(url: str) -> PhishingDetectionResponse:
@@ -144,7 +137,6 @@ async def check_urls_batch(
             url=url,
             request=request,
             db_manager=db_manager,
-            pipeline_mode=pipeline_mode,
         )
 
     deduped_urls: list[str] = list(dict.fromkeys(urls))

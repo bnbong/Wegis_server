@@ -15,12 +15,9 @@ class PerformanceStore:
         async with self._lock:
             self._records.append(record)
 
-    async def list(self, scenario: str | None = None) -> list[dict[str, Any]]:
+    async def list(self) -> list[dict[str, Any]]:
         async with self._lock:
-            records = list(self._records)
-        if scenario is None:
-            return records
-        return [r for r in records if r.get("scenario") == scenario]
+            return list(self._records)
 
     async def clear(self) -> None:
         async with self._lock:

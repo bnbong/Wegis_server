@@ -1,95 +1,95 @@
 {
-  "timestamp": "2026-03-18T14:49:34.558948+00:00",
+  "timestamp": "2026-03-19T03:05:20.372902+00:00",
   "mode": "baseline",
   "scenario": {
-    "base_url": "http://127.0.0.1:9000",
+    "base_url": "http://localhost:9000",
     "url_count": 5,
     "warmup": 0,
-    "concurrency": 4
+    "concurrency": 1
   },
   "summary": {
     "count": 5,
     "ok": 5,
-    "avg_ms": 1328.396,
-    "p95_ms": 1309.919,
-    "max_ms": 1474.158
+    "avg_ms": 1092.92,
+    "p95_ms": 1297.108,
+    "max_ms": 1488.054
   },
   "results": [
     {
-      "timestamp": "2026-03-18T14:49:35.987424+00:00",
+      "timestamp": "2026-03-19T03:05:21.994752+00:00",
       "scenario": "baseline",
       "url": "https://pypi.org/",
-      "total_ms": 1260.013,
+      "total_ms": 1471.304,
       "stages": {
-        "cache_lookup": 1.019,
-        "html_fetch": 165.905,
-        "preprocess": 38.937,
-        "inference": 1040.724,
-        "db_write": 13.428
+        "cache_lookup": 0.73,
+        "html_fetch": 243.13,
+        "preprocess": 134.412,
+        "inference": 1021.068,
+        "db_write": 71.964
       },
       "source": "model",
       "fetch_mode": "http",
       "cache_hit": false
     },
     {
-      "timestamp": "2026-03-18T14:49:35.989584+00:00",
-      "scenario": "baseline",
-      "url": "https://huggingface.co/",
-      "total_ms": 1249.652,
-      "stages": {
-        "cache_lookup": 71.506,
-        "html_fetch": 230.59199999999998,
-        "preprocess": 51.216,
-        "inference": 862.344,
-        "db_write": 33.994
-      },
-      "source": "model",
-      "fetch_mode": "http",
-      "cache_hit": false
-    },
-    {
-      "timestamp": "2026-03-18T14:49:36.016098+00:00",
+      "timestamp": "2026-03-19T03:05:22.881815+00:00",
       "scenario": "baseline",
       "url": "https://fastapi.tiangolo.com/",
-      "total_ms": 1286.663,
+      "total_ms": 875.774,
       "stages": {
-        "cache_lookup": 5.306,
-        "html_fetch": 238.12099999999998,
-        "preprocess": 159.182,
-        "inference": 877.868,
-        "db_write": 6.186
+        "cache_lookup": 0.645,
+        "html_fetch": 227.834,
+        "preprocess": 147.427,
+        "inference": 487.723,
+        "db_write": 12.145
       },
       "source": "model",
       "fetch_mode": "http",
       "cache_hit": false
     },
     {
-      "timestamp": "2026-03-18T14:49:36.180066+00:00",
+      "timestamp": "2026-03-19T03:05:23.546003+00:00",
+      "scenario": "baseline",
+      "url": "https://huggingface.co/",
+      "total_ms": 655.135,
+      "stages": {
+        "cache_lookup": 0.591,
+        "html_fetch": 144.689,
+        "preprocess": 38.365,
+        "inference": 426.4,
+        "db_write": 45.09
+      },
+      "source": "model",
+      "fetch_mode": "http",
+      "cache_hit": false
+    },
+    {
+      "timestamp": "2026-03-19T03:05:24.632583+00:00",
       "scenario": "baseline",
       "url": "https://kaggle.com/",
-      "total_ms": 1451.211,
+      "total_ms": 1067.829,
       "stages": {
-        "cache_lookup": 11.522,
-        "html_fetch": 587.682,
-        "preprocess": 4.688,
-        "inference": 840.045,
-        "db_write": 7.274
+        "cache_lookup": 1.184,
+        "html_fetch": 639.281,
+        "preprocess": 4.656,
+        "inference": 413.935,
+        "db_write": 8.773
       },
       "source": "model",
       "fetch_mode": "http",
       "cache_hit": false
     },
     {
-      "timestamp": "2026-03-18T14:49:37.280863+00:00",
+      "timestamp": "2026-03-19T03:05:25.973282+00:00",
       "scenario": "baseline",
       "url": "https://developer.mozilla.org/",
-      "total_ms": 1286.315,
+      "total_ms": 1288.627,
       "stages": {
-        "cache_lookup": 0.488,
-        "html_fetch": 745.211,
-        "preprocess": 50.026,
-        "inference": 483.846,
-        "db_write": 6.744
+        "cache_lookup": 0.803,
+        "html_fetch": 770.091,
+        "preprocess": 54.519,
+        "inference": 444.841,
+        "db_write": 18.373
       },
       "source": "model",
       "fetch_mode": "http",
@@ -100,14 +100,14 @@
     {
       "request_url": "https://pypi.org",
       "status_code": 200,
-      "latency_ms": 1282.149,
+      "latency_ms": 1488.054,
       "response": {
-        "timestamp": "2026-03-18T14:49:35.988280",
+        "timestamp": "2026-03-19T03:05:21.995545",
         "message": "SUCCESS",
         "data": {
           "url": "https://pypi.org/",
           "result": true,
-          "confidence": 0.9999616146087646,
+          "confidence": 0.9999700784683228,
           "source": "model",
           "fetch_mode": "http"
         }
@@ -116,9 +116,9 @@
     {
       "request_url": "https://fastapi.tiangolo.com",
       "status_code": 200,
-      "latency_ms": 1309.919,
+      "latency_ms": 886.213,
       "response": {
-        "timestamp": "2026-03-18T14:49:36.016857",
+        "timestamp": "2026-03-19T03:05:22.883048",
         "message": "SUCCESS",
         "data": {
           "url": "https://fastapi.tiangolo.com/",
@@ -132,9 +132,9 @@
     {
       "request_url": "https://huggingface.co",
       "status_code": 200,
-      "latency_ms": 1282.786,
+      "latency_ms": 664.971,
       "response": {
-        "timestamp": "2026-03-18T14:49:35.990205",
+        "timestamp": "2026-03-19T03:05:23.547342",
         "message": "SUCCESS",
         "data": {
           "url": "https://huggingface.co/",
@@ -148,9 +148,9 @@
     {
       "request_url": "https://www.kaggle.com",
       "status_code": 200,
-      "latency_ms": 1474.158,
+      "latency_ms": 1128.255,
       "response": {
-        "timestamp": "2026-03-18T14:49:36.180831",
+        "timestamp": "2026-03-19T03:05:24.633240",
         "message": "SUCCESS",
         "data": {
           "url": "https://kaggle.com/",
@@ -164,9 +164,9 @@
     {
       "request_url": "https://developer.mozilla.org",
       "status_code": 200,
-      "latency_ms": 1292.969,
+      "latency_ms": 1297.108,
       "response": {
-        "timestamp": "2026-03-18T14:49:37.281621",
+        "timestamp": "2026-03-19T03:05:25.974057",
         "message": "SUCCESS",
         "data": {
           "url": "https://developer.mozilla.org/",

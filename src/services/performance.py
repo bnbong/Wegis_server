@@ -40,7 +40,6 @@ def build_perf_record(
     timer: StageTimer,
     fetch_mode: str | None = None,
     cache_hit: bool = False,
-    scenario: str = "runtime",
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     stages = {
@@ -53,7 +52,6 @@ def build_perf_record(
     total_ms = round(sum(stages.values()), 3)
     payload: dict[str, Any] = {
         "timestamp": datetime.now(UTC).isoformat(),
-        "scenario": scenario,
         "url": url,
         "total_ms": total_ms,
         "stages": stages,
