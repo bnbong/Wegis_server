@@ -5,15 +5,14 @@
 # --------------------------------------------------------------------------
 import logging
 from typing import Any
+from time import perf_counter
 
 import torch
-from transformers import BertTokenizer
 
 from src.exceptions import AIException
 from src.services.model.preprocessor import DataPreprocessor
 from src.services.model.qbert import QsingBertModel
-from src.services.model.tokenizer import QbertUrlTokenizer
-from src.services.html.loader import HTMLLoader
+from src.services.model.preprocessor import get_html_tokenizer, get_url_tokenizer
 
 logger = logging.getLogger("main")
 
@@ -32,21 +31,35 @@ class PhishingDetector:
             logger.error(f"Failed to load model: {str(e)}")
             raise AIException(e)
 
-        self.url_tokenizer = QbertUrlTokenizer()
-        self.bert_tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
-        self.html_loader = HTMLLoader.get_instance()
+        self.url_tokenizer = get_url_tokenizer()
+        self.bert_tokenizer = get_html_tokenizer()
 
-    def predict(self, url: str) -> dict[str, Any]:
+    def predict_from_html(self, url: str, html: str) -> dict[str, Any]:
         logger.info(f"Predicting URL: {url}")
-
-        html = self.html_loader.load(url)
         if not html:
             return {"result": None, "confidence": None}
 
-        preprocessor = DataPreprocessor(url, html)
+        preprocess_started = perf_counter()
+        preprocessor = DataPreprocessor(
+            url,
+            html,
+            html_tokenizer=self.bert_tokenizer,
+            url_tokenizer=self.url_tokenizer,
+        )
         inputs = preprocessor.preprocess(self.device)
+        preprocess_ms = (perf_counter() - preprocess_started) * 1000
 
+        infer_started = perf_counter()
         with torch.no_grad():
             _, prob = self.model(inputs)
+        infer_ms = (perf_counter() - infer_started) * 1000
 
-        return {"result": float(prob) >= 0.5, "confidence": float(prob)}
+        return {
+            "result": float(prob) >= 0.5,
+            "confidence": float(prob),
+            "preprocess_ms": round(preprocess_ms, 3),
+            "infer_ms": round(infer_ms, 3),
+        }
+
+    def predict(self, url: str) -> dict[str, Any]:
+        return {"result": None, "confidence": None, "url": url}

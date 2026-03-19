@@ -12,9 +12,11 @@ class PhishingDetectionRequest(BaseModel):
 
 
 class PhishingDetectionResponse(BaseModel):
+    url: str = ""
     result: bool
     confidence: float
     source: str
+    fetch_mode: str | None = None
 
 
 class PhishingURLListResponse(BaseModel):

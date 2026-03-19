@@ -18,12 +18,32 @@ from src.schemas.analyze import (
 from src.enums import ResponseMessage
 from src.api.deps import get_db_manager
 from src.services.analyzer import AnalyzerService
-from datetime import datetime
+from src.services.perf_store import perf_store
 import asyncio
+from datetime import datetime
 
 logger = logging.getLogger("main")
 
 router = APIRouter(prefix="/analyze", tags=["analyze"])
+
+
+@router.get("/perf/records")
+async def get_perf_records(
+    scenario: str = Query("", description="Filter by scenario: baseline or optimized"),
+):
+    target = scenario or None
+    records = await perf_store.list(target)
+    return {
+        "timestamp": datetime.now().isoformat(),
+        "count": len(records),
+        "data": records,
+    }
+
+
+@router.delete("/perf/records")
+async def clear_perf_records():
+    await perf_store.clear()
+    return {"timestamp": datetime.now().isoformat(), "message": "cleared"}
 
 
 def get_recent_phishing_urls(
@@ -84,16 +104,18 @@ async def check_legacy():
 async def check_url(
     request_data: PhishingDetectionRequest,
     request: Request,
+    pipeline_mode: str = Query("optimized", pattern="^(optimized|baseline)$"),
     db_manager: DBManager = Depends(get_db_manager),
 ):
     """
     Single URL phishing detection endpoint
     """
-    analyzer = AnalyzerService()
+    analyzer = getattr(request.app.state, "analyzer_service", None) or AnalyzerService()
     result = await analyzer.analyze(
         url=request_data.url,
         request=request,
         db_manager=db_manager,
+        pipeline_mode=pipeline_mode,
     )
 
     response: ResponseSchema[PhishingDetectionResponse] = ResponseSchema(
@@ -108,34 +130,43 @@ async def check_url(
 async def check_urls_batch(
     urls: List[str],
     request: Request,
+    pipeline_mode: str = Query("optimized", pattern="^(optimized|baseline)$"),
     db_manager: DBManager = Depends(get_db_manager),
 ):
     """
     Batch URL phishing detection endpoint for browser extensions
     """
 
+    analyzer = getattr(request.app.state, "analyzer_service", None) or AnalyzerService()
+
     async def analyze_single_url(url: str) -> PhishingDetectionResponse:
-        analyzer = AnalyzerService()
         return await analyzer.analyze(
             url=url,
             request=request,
             db_manager=db_manager,
+            pipeline_mode=pipeline_mode,
         )
 
-    # 비동기로 여러 URL을 동시에 처리
-    tasks = [analyze_single_url(url) for url in urls]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    deduped_urls: list[str] = list(dict.fromkeys(urls))
+    tasks = {url: asyncio.create_task(analyze_single_url(url)) for url in deduped_urls}
+    gathered = await asyncio.gather(*tasks.values(), return_exceptions=True)
+    result_map: dict[str, PhishingDetectionResponse] = {}
+    for url, result in zip(tasks.keys(), gathered):
+        if isinstance(result, PhishingDetectionResponse):
+            result_map[url] = result
+            continue
+        logger.error(f"Error analyzing URL {url}: {result}")
+        result_map[url] = PhishingDetectionResponse(
+            url=url,
+            result=False,
+            confidence=0.0,
+            source="error",
+            fetch_mode="none",
+        )
 
-    # 예외가 발생한 경우 에러 응답으로 변환
     processed_results: List[PhishingDetectionResponse] = []
-    for i, result in enumerate(results):
-        if isinstance(result, Exception):
-            logger.error(f"Error analyzing URL {urls[i]}: {result}")
-            processed_results.append(
-                PhishingDetectionResponse(result=False, confidence=0.0, source="error")
-            )
-        elif isinstance(result, PhishingDetectionResponse):
-            processed_results.append(result)
+    for url in urls:
+        processed_results.append(result_map[url])
 
     response: ResponseSchema[List[PhishingDetectionResponse]] = ResponseSchema(
         timestamp=datetime.now().isoformat(),

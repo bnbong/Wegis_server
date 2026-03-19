@@ -17,7 +17,7 @@ echo "Redis is ready! Adding default domain lists..."
 
 # Add default whitelist domains
 echo "Adding whitelist domains..."
-redis-cli -h redis -p 6379 SADD "wegis:whitelist:domains" \
+redis-cli -h localhost -p 6379 -n 4 SADD "wegis:whitelist:domains" \
   "google.com" \
   "amazon.com" \
   "microsoft.com" \
@@ -44,7 +44,7 @@ redis-cli -h redis -p 6379 SADD "wegis:whitelist:domains" \
 
 # Add default whitelist patterns
 echo "Adding whitelist patterns..."
-redis-cli -h redis -p 6379 SADD "wegis:whitelist:patterns" \
+redis-cli -h localhost -p 6379 -n 4 SADD "wegis:whitelist:patterns" \
   "*.google.com" \
   "*.amazon.com" \
   "*.microsoft.com" \

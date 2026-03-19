@@ -1,0 +1,181 @@
+{
+  "timestamp": "2026-03-18T14:50:08.701709+00:00",
+  "mode": "optimized",
+  "scenario": {
+    "base_url": "http://127.0.0.1:9000",
+    "url_count": 5,
+    "warmup": 0,
+    "concurrency": 4
+  },
+  "summary": {
+    "count": 5,
+    "ok": 5,
+    "avg_ms": 1138.413,
+    "p95_ms": 1217.401,
+    "max_ms": 1228.999
+  },
+  "results": [
+    {
+      "timestamp": "2026-03-18T14:50:10.049832+00:00",
+      "scenario": "optimized",
+      "url": "https://huggingface.co/",
+      "total_ms": 1180.728,
+      "stages": {
+        "cache_lookup": 2.803,
+        "html_fetch": 84.77,
+        "preprocess": 81.252,
+        "inference": 992.052,
+        "db_write": 19.851
+      },
+      "source": "model",
+      "fetch_mode": "http",
+      "cache_hit": false
+    },
+    {
+      "timestamp": "2026-03-18T14:50:10.051871+00:00",
+      "scenario": "optimized",
+      "url": "https://kaggle.com/",
+      "total_ms": 1177.184,
+      "stages": {
+        "cache_lookup": 26.999,
+        "html_fetch": 270.749,
+        "preprocess": 3.989,
+        "inference": 859.672,
+        "db_write": 15.775
+      },
+      "source": "model",
+      "fetch_mode": "http",
+      "cache_hit": false
+    },
+    {
+      "timestamp": "2026-03-18T14:50:10.060095+00:00",
+      "scenario": "optimized",
+      "url": "https://fastapi.tiangolo.com/",
+      "total_ms": 1194.266,
+      "stages": {
+        "cache_lookup": 3.426,
+        "html_fetch": 176.772,
+        "preprocess": 115.082,
+        "inference": 875.101,
+        "db_write": 23.885
+      },
+      "source": "model",
+      "fetch_mode": "http",
+      "cache_hit": false
+    },
+    {
+      "timestamp": "2026-03-18T14:50:10.070632+00:00",
+      "scenario": "optimized",
+      "url": "https://pypi.org/",
+      "total_ms": 1195.68,
+      "stages": {
+        "cache_lookup": 0.892,
+        "html_fetch": 91.395,
+        "preprocess": 71.532,
+        "inference": 1026.616,
+        "db_write": 5.245
+      },
+      "source": "model",
+      "fetch_mode": "http",
+      "cache_hit": false
+    },
+    {
+      "timestamp": "2026-03-18T14:50:10.879700+00:00",
+      "scenario": "optimized",
+      "url": "https://developer.mozilla.org/",
+      "total_ms": 820.425,
+      "stages": {
+        "cache_lookup": 1.105,
+        "html_fetch": 392.697,
+        "preprocess": 44.474,
+        "inference": 372.754,
+        "db_write": 9.395
+      },
+      "source": "model",
+      "fetch_mode": "http",
+      "cache_hit": false
+    }
+  ],
+  "raw_results": [
+    {
+      "request_url": "https://pypi.org",
+      "status_code": 200,
+      "latency_ms": 1228.999,
+      "response": {
+        "timestamp": "2026-03-18T14:50:10.071263",
+        "message": "SUCCESS",
+        "data": {
+          "url": "https://pypi.org/",
+          "result": true,
+          "confidence": 0.9999616146087646,
+          "source": "model",
+          "fetch_mode": "http"
+        }
+      }
+    },
+    {
+      "request_url": "https://fastapi.tiangolo.com",
+      "status_code": 200,
+      "latency_ms": 1217.401,
+      "response": {
+        "timestamp": "2026-03-18T14:50:10.060699",
+        "message": "SUCCESS",
+        "data": {
+          "url": "https://fastapi.tiangolo.com/",
+          "result": true,
+          "confidence": 0.9999998807907104,
+          "source": "model",
+          "fetch_mode": "http"
+        }
+      }
+    },
+    {
+      "request_url": "https://huggingface.co",
+      "status_code": 200,
+      "latency_ms": 1207.924,
+      "response": {
+        "timestamp": "2026-03-18T14:50:10.050707",
+        "message": "SUCCESS",
+        "data": {
+          "url": "https://huggingface.co/",
+          "result": true,
+          "confidence": 1.0,
+          "source": "model",
+          "fetch_mode": "http"
+        }
+      }
+    },
+    {
+      "request_url": "https://www.kaggle.com",
+      "status_code": 200,
+      "latency_ms": 1209.107,
+      "response": {
+        "timestamp": "2026-03-18T14:50:10.052580",
+        "message": "SUCCESS",
+        "data": {
+          "url": "https://kaggle.com/",
+          "result": true,
+          "confidence": 1.0,
+          "source": "model",
+          "fetch_mode": "http"
+        }
+      }
+    },
+    {
+      "request_url": "https://developer.mozilla.org",
+      "status_code": 200,
+      "latency_ms": 828.632,
+      "response": {
+        "timestamp": "2026-03-18T14:50:10.880344",
+        "message": "SUCCESS",
+        "data": {
+          "url": "https://developer.mozilla.org/",
+          "result": true,
+          "confidence": 0.9967021346092224,
+          "source": "model",
+          "fetch_mode": "http"
+        }
+      }
+    }
+  ]
+}

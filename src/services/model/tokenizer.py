@@ -6,7 +6,6 @@
 # @author bnbong bbbong9@gmail.com
 # --------------------------------------------------------------------------
 import torch
-from tqdm import tqdm  # type: ignore
 
 
 class QbertUrlTokenizer:
@@ -79,11 +78,10 @@ class QbertUrlTokenizer:
         # Split characters one by one and convert to token indices
         token_ids = []
         mask = []
-        for urls in tqdm(url_list, desc="url token"):
+        for urls in url_list:
             url_item = []
             mask_item = []
             for idx, url in enumerate(urls):
-                print(url)
                 tokens = [
                     self.token_to_idx.get(ch, self.token_to_idx["[NONE]"]) for ch in url
                 ]
