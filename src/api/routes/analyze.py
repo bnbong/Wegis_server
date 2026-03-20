@@ -5,10 +5,11 @@
 # --------------------------------------------------------------------------
 import logging
 from typing import Optional, List
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, HTTPException
 from fastapi.responses import RedirectResponse
 
 from src.database import DBManager
+from src.core.config import settings
 from src.schemas.common import ResponseSchema
 from src.schemas.analyze import (
     PhishingURLListResponse,
@@ -27,8 +28,14 @@ logger = logging.getLogger("main")
 router = APIRouter(prefix="/analyze", tags=["analyze"])
 
 
+def ensure_perf_records_access() -> None:
+    if settings.ENVIRONMENT == "production":
+        raise HTTPException(status_code=403, detail="Performance records unavailable")
+
+
 @router.get("/perf/records")
 async def get_perf_records():
+    ensure_perf_records_access()
     records = await perf_store.list()
     return {
         "timestamp": datetime.now().isoformat(),
@@ -39,6 +46,7 @@ async def get_perf_records():
 
 @router.delete("/perf/records")
 async def clear_perf_records():
+    ensure_perf_records_access()
     await perf_store.clear()
     return {"timestamp": datetime.now().isoformat(), "message": "cleared"}
 

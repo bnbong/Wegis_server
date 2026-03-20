@@ -37,6 +37,53 @@ class TestHealthEndpoint:
 class TestAnalyzeEndpoints:
     """Analyze endpoint test"""
 
+    def test_get_perf_records(self, client):
+        """Performance record lookup test"""
+        records = [
+            {
+                "url": "https://example.com",
+                "source": "model",
+                "total_ms": 12.3,
+            }
+        ]
+
+        with (
+            patch("src.api.routes.analyze.settings.ENVIRONMENT", "test"),
+            patch(
+                "src.api.routes.analyze.perf_store.list",
+                new=AsyncMock(return_value=records),
+            ),
+        ):
+            response = client.get("/analyze/perf/records")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 1
+        assert data["data"] == records
+
+    def test_clear_perf_records(self, client):
+        """Performance record clear test"""
+        with (
+            patch("src.api.routes.analyze.settings.ENVIRONMENT", "test"),
+            patch(
+                "src.api.routes.analyze.perf_store.clear",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            response = client.delete("/analyze/perf/records")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["message"] == "cleared"
+
+    def test_perf_records_forbidden_in_production(self, client):
+        """Performance record endpoint should be blocked in production"""
+        with patch("src.api.routes.analyze.settings.ENVIRONMENT", "production"):
+            response = client.get("/analyze/perf/records")
+
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Performance records unavailable"
+
     def test_get_recent_phishing(self, client, mock_db_manager):
         """Recent phishing URL lookup test"""
         # Mock phishing URL object

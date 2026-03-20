@@ -88,11 +88,6 @@ class HTMLLoader:
                 return driver.page_source
             except Exception as e:
                 logger.warning(f"Attempt {attempt + 1} failed: {e}")
-                if driver:
-                    try:
-                        driver.quit()
-                    except Exception:
-                        pass
                 if attempt == self.retries - 1:
                     raise BackendExceptions(
                         f"Failed to load URL after {self.retries} attempts"

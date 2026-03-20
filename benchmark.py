@@ -15,7 +15,7 @@ def parse_args() -> argparse.Namespace:
         "--mode",
         choices=["baseline", "optimized"],
         required=True,
-        help="Pipeline mode to benchmark",
+        help="Benchmark scenario label used in output filenames and reports",
     )
     parser.add_argument(
         "--base-url",
@@ -67,13 +67,11 @@ def load_urls(urls_file: str) -> list[str]:
 async def run_single(
     client: httpx.AsyncClient,
     base_url: str,
-    mode: str,
     url: str,
 ) -> dict:
     started = time.perf_counter()
     resp = await client.post(
         f"{base_url}/analyze/check",
-        params={"pipeline_mode": mode},
         json={"url": url},
     )
     elapsed_ms = (time.perf_counter() - started) * 1000
@@ -106,11 +104,11 @@ async def run_benchmark(
         await client.delete(f"{base_url}/analyze/perf/records")
 
         for i in range(min(warmup, len(urls))):
-            await run_single(client, base_url, mode, urls[i])
+            await run_single(client, base_url, urls[i])
 
         async def guarded(u: str) -> dict:
             async with sem:
-                return await run_single(client, base_url, mode, u)
+                return await run_single(client, base_url, u)
 
         results = await asyncio.gather(*[guarded(u) for u in urls])
         return results
@@ -139,13 +137,10 @@ def summarize(results: list[dict]) -> dict:
     }
 
 
-async def fetch_perf_records(base_url: str, mode: str) -> list[dict]:
+async def fetch_perf_records(base_url: str) -> list[dict]:
     timeout = httpx.Timeout(30.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.get(
-            f"{base_url}/analyze/perf/records",
-            params={"scenario": mode},
-        )
+        response = await client.get(f"{base_url}/analyze/perf/records")
         response.raise_for_status()
         payload = response.json()
         records = payload.get("data", [])
@@ -170,7 +165,7 @@ def main() -> None:
     )
 
     summary = summarize(results)
-    metrics = asyncio.run(fetch_perf_records(args.base_url, args.mode))
+    metrics = asyncio.run(fetch_perf_records(args.base_url))
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

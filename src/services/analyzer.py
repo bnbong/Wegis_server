@@ -102,15 +102,23 @@ class AnalyzerService:
             confidence,
             html_content,
         )
-        cache_callable = getattr(db_manager, "cache_phishing_result", None)
+        cache_callable = getattr(db_manager, "cache_result", None)
+        cache_kwargs = {
+            "url": url,
+            "is_phishing": result,
+            "confidence": confidence,
+        }
         if cache_callable is None:
-            cache_callable = getattr(db_manager, "cache_result", None)
+            cache_callable = getattr(db_manager, "cache_phishing_result", None)
+            cache_kwargs["ttl"] = (
+                settings.REDIS_CACHE_TTL_PHISHING
+                if result
+                else settings.REDIS_CACHE_TTL_BENIGN
+            )
 
         if cache_callable is not None:
             cache_invocation = cache_callable(
-                url=url,
-                is_phishing=result,
-                confidence=confidence,
+                **cache_kwargs,
             )
             if inspect.isawaitable(cache_invocation):
                 await cache_invocation
