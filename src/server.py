@@ -13,6 +13,7 @@ from src.core.config import settings
 from src.logger import Logger
 from src.database import DBManager
 from src.services.model.manager import PhishingDetector
+from src.services.analyzer import AnalyzerService
 from src.orm_models import UserFeedback
 from src.api.main import router as api_router
 from src.clients.redis import init_redis, close_redis
@@ -42,6 +43,7 @@ async def lifespan(app: FastAPI):
         # Load AI model
         logger.info("Loading AI model...")
         app.state.model = PhishingDetector(model_path=settings.MODEL_PATH)
+        app.state.analyzer_service = AnalyzerService()
 
         logger.info("Application startup complete")
 
@@ -55,7 +57,14 @@ async def lifespan(app: FastAPI):
             app.state.db_manager.close()
 
         # Unload AI model
+        if (
+            hasattr(app.state, "analyzer_service")
+            and app.state.analyzer_service is not None
+        ):
+            logger.info("Closing analyzer service...")
+            app.state.analyzer_service.close()
         app.state.model = None
+        app.state.analyzer_service = None
         logger.info("AI model unloaded")
 
         # Close MongoDB connection

@@ -3,6 +3,8 @@
 #
 # @author bnbong bbbong9@gmail.com
 # --------------------------------------------------------------------------
+from __future__ import annotations
+
 import os
 import secrets
 import warnings
@@ -91,6 +93,8 @@ class Settings(BaseSettings):
     REDIS_PORT: int = 6379
     REDIS_DB: int = 0
     REDIS_CACHE_TTL: int = int(os.getenv("REDIS_CACHE_TTL", "43200"))
+    REDIS_CACHE_TTL_PHISHING: int = int(os.getenv("REDIS_CACHE_TTL_PHISHING", "86400"))
+    REDIS_CACHE_TTL_BENIGN: int = int(os.getenv("REDIS_CACHE_TTL_BENIGN", "1800"))
     REDIS_NAMESPACE: str = "wegis"
     REDIS_MAX_CONNECTIONS: int = 10
     REDIS_RETRY_ON_TIMEOUT: bool = True
@@ -133,7 +137,12 @@ class Settings(BaseSettings):
         return f"mongodb://{self.MONGODB_USER}:{self.MONGODB_PASSWORD}@{self.MONGODB_HOST}:{self.MONGODB_PORT}/{self.MONGODB_NAME}?authSource=admin&maxPoolSize={self.MONGODB_MAX_POOL_SIZE}&minPoolSize={self.MONGODB_MIN_POOL_SIZE}&serverSelectionTimeoutMS={self.MONGODB_SERVER_SELECTION_TIMEOUT}"
 
     MAX_CONCURRENT_REQUESTS: int = 5
+    MAX_BROWSER_CONCURRENCY: int = int(os.getenv("MAX_BROWSER_CONCURRENCY", "2"))
+    MAX_INFER_CONCURRENCY: int = int(os.getenv("MAX_INFER_CONCURRENCY", "4"))
     MODEL_CACHE_SIZE: int = 1
+
+    BENCHMARK_OUTPUT_DIR: str = os.getenv("BENCHMARK_OUTPUT_DIR", "./log/benchmarks")
+    ENABLE_PERF_RECORDS: bool | None = None
 
     CHROME_PROCESS_TIMEOUT: int = 30
     CHROME_MAX_INSTANCES: int = 2
@@ -151,6 +160,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _enforce_non_default_secrets(self) -> Self:
+        if self.ENABLE_PERF_RECORDS is None:
+            self.ENABLE_PERF_RECORDS = self.ENVIRONMENT != "production"
         self._check_default_secret("SECRET_KEY", self.SECRET_KEY)
         return self
 

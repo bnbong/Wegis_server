@@ -71,6 +71,7 @@ def mock_db_manager():
     # Set asynchronous methods to AsyncMock
     db_manager.get_cached_result = AsyncMock(return_value=None)
     db_manager.save_phishing_url = MagicMock(return_value=MagicMock())
+    db_manager.cache_result = AsyncMock(return_value=None)
     db_manager.cache_phishing_result = AsyncMock(return_value=None)
     db_manager.get_phishing_urls = MagicMock(return_value=[])
     return db_manager
@@ -115,13 +116,13 @@ async def domain_checker(mock_redis):
 def analyzer_service():
     """AnalyzerService instance fixture
 
-    Create AnalyzerService with mocked HTMLLoader and PhishingDetector.
+    Create AnalyzerService with BrowserFetcher HTMLLoader mocked.
+    PhishingDetector is no longer imported in analyzer.py; model is injected via request.app.state.
     """
-    with (
-        patch("src.services.analyzer.HTMLLoader"),
-        patch("src.services.analyzer.PhishingDetector"),
-    ):
-        return AnalyzerService()
+    with patch("src.services.fetchers.browser_fetcher.HTMLLoader"):
+        service = AnalyzerService()
+        yield service
+        service.close()
 
 
 @pytest.fixture

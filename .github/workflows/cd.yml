@@ -1,16 +1,148 @@
-name: CD - deploy to instance
+name: CD
 
 on:
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: true
 
 jobs:
-  build:
+  deploy:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
+    timeout-minutes: 45
+    environment: production
+    permissions:
+      contents: read
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_IP }}
+      DEPLOY_PORT: ${{ secrets.DEPLOY_PORT != '' && secrets.DEPLOY_PORT || '22' }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+      DEPLOY_REVISION: ${{ github.event.workflow_run.head_sha }}
+      CONTAINER_NAME: ${{ secrets.APP_CONTAINER_NAME != '' && secrets.APP_CONTAINER_NAME || 'wegis_server' }}
+      IMAGE_NAME: ${{ secrets.APP_IMAGE_NAME != '' && secrets.APP_IMAGE_NAME || 'wegis-server' }}
+      APP_PORT: ${{ secrets.APP_PORT != '' && secrets.APP_PORT || '9000' }}
+      REDIS_CONTAINER_NAME: ${{ secrets.REDIS_CONTAINER_NAME != '' && secrets.REDIS_CONTAINER_NAME || 'vm2-redis' }}
+      DEPLOY_DOCKER_NETWORK: ${{ secrets.DEPLOY_DOCKER_NETWORK }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
+    steps:
+      - name: Checkout deployment revision
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Configure SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+      - name: Sync repository to server
+        run: |
+          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH'"
+          rsync -az --delete \
+            --exclude '.git/' \
+            --exclude '.github/' \
+            --exclude '.venv/' \
+            --exclude '__pycache__/' \
+            --exclude '.pytest_cache/' \
+            --exclude '.mypy_cache/' \
+            --exclude '.ruff_cache/' \
+            --exclude '.claude/' \
+            --exclude 'models/' \
+            --exclude 'log/' \
+            -e "ssh -p $DEPLOY_PORT" \
+            ./ "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
+
+      - name: Upload production env file
+        run: |
+          printf '%s' "${{ secrets.PROD_ENV_FILE }}" | \
+            ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "cat > '$DEPLOY_PATH/.env'"
+
+      - name: Build and replace app container
+        run: |
+          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' DEPLOY_REVISION='$DEPLOY_REVISION' CONTAINER_NAME='$CONTAINER_NAME' IMAGE_NAME='$IMAGE_NAME' APP_PORT='$APP_PORT' REDIS_CONTAINER_NAME='$REDIS_CONTAINER_NAME' DEPLOY_DOCKER_NETWORK='$DEPLOY_DOCKER_NETWORK' bash -s" <<'EOF'
+          set -euo pipefail
+
+          cd "$DEPLOY_PATH"
+          mkdir -p models log
+
+          IMAGE_TAG="${IMAGE_NAME}:${DEPLOY_REVISION}"
+          BACKUP_CONTAINER="${CONTAINER_NAME}_backup_${DEPLOY_REVISION:0:7}"
+          PREVIOUS_CONTAINER_ID="$(docker ps -aq -f name=^${CONTAINER_NAME}$ || true)"
+          NETWORK_NAME="${DEPLOY_DOCKER_NETWORK:-}"
+
+          if [ -z "$NETWORK_NAME" ] && docker inspect "$REDIS_CONTAINER_NAME" >/dev/null 2>&1; then
+            NETWORK_NAME="$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{println $k}}{{end}}' "$REDIS_CONTAINER_NAME" | awk 'NF { print; exit }')"
+          fi
+
+          echo "Building image $IMAGE_TAG"
+          docker build -t "$IMAGE_TAG" -t "${IMAGE_NAME}:latest" .
+
+          if [ -n "$PREVIOUS_CONTAINER_ID" ]; then
+            echo "Stopping current container $CONTAINER_NAME"
+            docker stop "$CONTAINER_NAME"
+            docker rename "$CONTAINER_NAME" "$BACKUP_CONTAINER"
+          fi
+
+          RUN_ARGS=(
+            --detach
+            --name "$CONTAINER_NAME"
+            --restart unless-stopped
+            --env-file .env
+            -p "${APP_PORT}:9000"
+          )
+
+          if [ -n "$NETWORK_NAME" ]; then
+            echo "Attaching app container to network $NETWORK_NAME"
+            RUN_ARGS+=(--network "$NETWORK_NAME")
+          else
+            echo "No Docker network detected from $REDIS_CONTAINER_NAME. Using Docker default network."
+          fi
+
+          docker run "${RUN_ARGS[@]}" "$IMAGE_TAG"
+
+          HEALTH_OK=0
+          for _ in $(seq 1 24); do
+            STATUS="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+            if [ "$STATUS" = "healthy" ]; then
+              HEALTH_OK=1
+              break
+            fi
+            if [ "$STATUS" = "exited" ] || [ "$STATUS" = "dead" ]; then
+              break
+            fi
+            sleep 5
+          done
+
+          if [ "$HEALTH_OK" -ne 1 ]; then
+            echo "New container failed health check"
+            docker logs "$CONTAINER_NAME" || true
+            docker rm -f "$CONTAINER_NAME" || true
+
+            if [ -n "$PREVIOUS_CONTAINER_ID" ]; then
+              echo "Rolling back to previous container"
+              docker rename "$BACKUP_CONTAINER" "$CONTAINER_NAME"
+              docker start "$CONTAINER_NAME"
+            fi
+
+            exit 1
+          fi
+
+          if [ -n "$PREVIOUS_CONTAINER_ID" ]; then
+            docker rm -f "$BACKUP_CONTAINER" || true
+          fi
+
+          docker ps --filter "name=^${CONTAINER_NAME}$"
+          docker image prune -f >/dev/null 2>&1 || true
+          EOF

@@ -17,6 +17,7 @@ from src.exceptions import BackendExceptions
 from src.orm_models import PhishingURL, UserFeedback
 from src.clients.redis import get_redis
 from src.clients.mongo import get_mongo_database
+from src.services.url_utils import canonicalize_url
 
 logger = logging.getLogger("main")
 
@@ -51,24 +52,49 @@ class DBManager:
         """Close PostgreSQL database connections"""
         logger.info("PostgreSQL database connections closed")
 
+    def _cache_key(self, url: str) -> str:
+        canonical = canonicalize_url(url)
+        return f"{settings.REDIS_NAMESPACE}:phishing:{canonical}"
+
     # Redis operations
-    async def cache_phishing_result(
-        self, url: str, is_phishing: bool, confidence: float, ttl: int = 86400
+    async def cache_result(
+        self, url: str, is_phishing: bool, confidence: float, ttl: Optional[int] = None
     ) -> None:
-        """Cache phishing URL result in Redis"""
+        """Cache URL analysis result in Redis"""
+        resolved_ttl = ttl
+        if resolved_ttl is None:
+            resolved_ttl = (
+                settings.REDIS_CACHE_TTL_PHISHING
+                if is_phishing
+                else settings.REDIS_CACHE_TTL_BENIGN
+            )
+
         cache_data = {
             "is_phishing": is_phishing,
             "confidence": confidence,
+            "canonical_url": canonicalize_url(url),
             "last_updated": datetime.now().isoformat(),
         }
         redis_client = await get_redis()
-        await redis_client.setex(f"phishing:{url}", ttl, json.dumps(cache_data))  # type: ignore
+        await redis_client.setex(
+            self._cache_key(url), resolved_ttl, json.dumps(cache_data)
+        )  # type: ignore
         logger.info(f"Cached result for URL: {url}")
+
+    async def cache_phishing_result(
+        self, url: str, is_phishing: bool, confidence: float, ttl: int = 86400
+    ) -> None:
+        await self.cache_result(
+            url=url,
+            is_phishing=is_phishing,
+            confidence=confidence,
+            ttl=ttl,
+        )
 
     async def get_cached_result(self, url: str) -> Optional[Dict[str, Any]]:
         """Get cached phishing URL result from Redis"""
         redis_client = await get_redis()
-        result = await redis_client.get(f"phishing:{url}")  # type: ignore
+        result = await redis_client.get(self._cache_key(url))  # type: ignore
         if result:
             logger.info(f"Cache hit for URL: {url}")
             return json.loads(result)

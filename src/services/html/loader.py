@@ -4,7 +4,6 @@
 # @author bnbong bbbong9@gmail.com
 # --------------------------------------------------------------------------
 import logging
-import time
 
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
@@ -24,30 +23,19 @@ class HTMLLoader:
         self.chrome_options.add_argument("--no-sandbox")
         self.chrome_options.add_argument("--disable-dev-shm-usage")
         self.chrome_options.add_argument("--disable-gpu")
-        self.driver = None
         self.chromedriver_path = settings.CHROMEDRIVER_PATH
         self.timeout = settings.HTML_LOAD_TIMEOUT
         self.retries = settings.HTML_LOAD_RETRIES
 
-    def _init_driver(self) -> bool:
+    def _init_driver(self):
         try:
-            # service = ChromiumService(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
             service = webdriver.ChromeService(executable_path=self.chromedriver_path)
-            self.driver = webdriver.Chrome(service=service, options=self.chrome_options)
-            self.driver.set_page_load_timeout(self.timeout)
-
-            # User Agent setting is commented out for stability
-            # self.driver.execute_cdp_cmd('Network.setUserAgentOverride', {
-            #     "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-            # })
-
-            # Memory usage monitoring is also commented out for stability
-            # self.driver.execute_cdp_cmd('Memory.startSampling', {})
-
-            return True
+            driver = webdriver.Chrome(service=service, options=self.chrome_options)
+            driver.set_page_load_timeout(self.timeout)
+            return driver
         except Exception as e:
             logger.error(f"Failed to initialize WebDriver: {e}")
-            return False
+            raise BackendExceptions("Failed to initialize WebDriver")
 
     # TODO : Handle case of short url or redirect url
 
@@ -67,22 +55,22 @@ class HTMLLoader:
             rest += "/"
         return protocol + rest
 
-    def __load_url(self, url: str) -> str:
+    def __load_url(self, driver, url: str) -> str:
         url = self._normalize_url(url)
         try:
             if not (url.startswith("http://") or url.startswith("https://")):
                 # Try HTTP first
                 try:
                     http_url = f"http://{url}"
-                    self.driver.get(http_url)
+                    driver.get(http_url)
                     return http_url
                 except TimeoutException:
                     # If HTTP fails, try HTTPS
                     https_url = f"https://{url}"
-                    self.driver.get(https_url)
+                    driver.get(https_url)
                     return https_url
             else:
-                self.driver.get(url)
+                driver.get(url)
                 return url
         except TimeoutException:
             logger.error(f"Timeout while loading URL: {url}")
@@ -93,40 +81,27 @@ class HTMLLoader:
 
     def load(self, url: str) -> str | None:
         for attempt in range(self.retries):
+            driver = None
             try:
-                if not self.driver:
-                    if not self._init_driver():
-                        raise BackendExceptions("Failed to initialize WebDriver")
-
-                url = self.__load_url(url)
-                self.driver.get(url)
-
-                time.sleep(1.5)
-                return self.driver.page_source
+                driver = self._init_driver()
+                self.__load_url(driver, url)
+                return driver.page_source
             except Exception as e:
                 logger.warning(f"Attempt {attempt + 1} failed: {e}")
-                if self.driver:
-                    try:
-                        # Memory cleanup is commented out for stability
-                        # self.driver.execute_cdp_cmd('Memory.forciblyPurgeJavaScriptMemory', {})
-                        self.driver.quit()
-                    except Exception:
-                        pass
-                    self.driver = None
                 if attempt == self.retries - 1:
                     raise BackendExceptions(
                         f"Failed to load URL after {self.retries} attempts"
                     )
+            finally:
+                if driver:
+                    try:
+                        driver.quit()
+                    except Exception:
+                        pass
         return ""
 
     def __del__(self):
-        if self.driver:
-            try:
-                # Memory cleanup is commented out for stability
-                # self.driver.execute_cdp_cmd('Memory.forciblyPurgeJavaScriptMemory', {})
-                self.driver.quit()
-            except Exception:
-                pass
+        return None
 
     @staticmethod
     def get_instance():

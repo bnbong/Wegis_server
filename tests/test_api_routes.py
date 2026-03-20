@@ -37,6 +37,53 @@ class TestHealthEndpoint:
 class TestAnalyzeEndpoints:
     """Analyze endpoint test"""
 
+    def test_get_perf_records(self, client):
+        """Performance record lookup test"""
+        records = [
+            {
+                "url": "https://example.com",
+                "source": "model",
+                "total_ms": 12.3,
+            }
+        ]
+
+        with (
+            patch("src.api.routes.analyze.settings.ENABLE_PERF_RECORDS", True),
+            patch(
+                "src.api.routes.analyze.perf_store.list",
+                new=AsyncMock(return_value=records),
+            ),
+        ):
+            response = client.get("/analyze/perf/records")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 1
+        assert data["data"] == records
+
+    def test_clear_perf_records(self, client):
+        """Performance record clear test"""
+        with (
+            patch("src.api.routes.analyze.settings.ENABLE_PERF_RECORDS", True),
+            patch(
+                "src.api.routes.analyze.perf_store.clear",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            response = client.delete("/analyze/perf/records")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["message"] == "cleared"
+
+    def test_perf_records_forbidden_in_production(self, client):
+        """Performance record endpoint should be blocked in production"""
+        with patch("src.api.routes.analyze.settings.ENABLE_PERF_RECORDS", False):
+            response = client.get("/analyze/perf/records")
+
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Performance records unavailable"
+
     def test_get_recent_phishing(self, client, mock_db_manager):
         """Recent phishing URL lookup test"""
         # Mock phishing URL object
@@ -80,6 +127,23 @@ class TestAnalyzeEndpoints:
             assert data["data"]["result"] is True
             assert data["data"]["confidence"] == 0.85
             assert data["data"]["source"] == "model"
+
+    def test_check_single_url_rejects_blank_url(self, client, mock_db_manager):
+        """Blank URL input should fail validation"""
+        with patch("src.api.deps.DBManager", return_value=mock_db_manager):
+            response = client.post("/analyze/check", json={"url": "   "})
+
+        assert response.status_code == 422
+
+    def test_check_batch_urls_rejects_blank_item(self, client, mock_db_manager):
+        """Blank batch item should fail validation"""
+        with patch("src.api.deps.DBManager", return_value=mock_db_manager):
+            response = client.post(
+                "/analyze/batch",
+                json=["https://ok.com", "   ", "https://still-ok.com"],
+            )
+
+        assert response.status_code == 422
 
     def test_check_batch_urls(self, client, mock_db_manager):
         """Batch URL analysis test"""

@@ -5,6 +5,7 @@
 # --------------------------------------------------------------------------
 import logging
 import re
+from functools import lru_cache
 
 from html2text import HTML2Text
 from langdetect import detect  # type: ignore
@@ -17,11 +18,17 @@ logger = logging.getLogger("main")
 
 
 class DataPreprocessor:
-    def __init__(self, url: str, html: str):
+    def __init__(
+        self,
+        url: str,
+        html: str,
+        html_tokenizer: BertTokenizer | None = None,
+        url_tokenizer: QbertUrlTokenizer | None = None,
+    ):
         self.url = url
         self.html = html
-        self.html_tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
-        self.url_tokenizer = QbertUrlTokenizer()
+        self.html_tokenizer = html_tokenizer or get_html_tokenizer()
+        self.url_tokenizer = url_tokenizer or get_url_tokenizer()
         self.max_length = 512
 
     def preprocess(self, device: device):
@@ -33,10 +40,13 @@ class DataPreprocessor:
         content = converter.handle(self.html)
         sentences = re.split(r"(?<=[.!?]) +", content)
 
-        contents = []
-        for s in sentences:
-            if detect(s) == "en":  # analyze only English sites
-                contents.append(s)
+        contents = [s for s in sentences if s.strip()]
+        merged = " ".join(contents[:20])
+        try:
+            if merged and detect(merged) != "en":
+                contents = contents[:10]
+        except Exception:
+            contents = contents[:10]
 
         text = "[CLS]" + "[SEP]".join(contents)
         html_tokens = self.html_tokenizer(
@@ -57,3 +67,13 @@ class DataPreprocessor:
             "html_input_ids": html_tokens["input_ids"].to(device),
             "html_attention_mask": html_tokens["attention_mask"].to(device),
         }
+
+
+@lru_cache(maxsize=1)
+def get_html_tokenizer() -> BertTokenizer:
+    return BertTokenizer.from_pretrained("bert-base-uncased")
+
+
+@lru_cache(maxsize=1)
+def get_url_tokenizer() -> QbertUrlTokenizer:
+    return QbertUrlTokenizer()

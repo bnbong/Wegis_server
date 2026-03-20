@@ -18,7 +18,11 @@ services:
     networks:
       - wegis_network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-phishing_data}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-phishing_data}",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -77,7 +81,7 @@ services:
         echo "Initializing Redis with default domain lists..."
 
         echo "Adding whitelist domains..."
-        redis-cli -h redis -p 6379 SADD "wegis:whitelist:domains" \
+        redis-cli -h redis -p 6379 -n ${REDIS_DB:-0} SADD "wegis:whitelist:domains" \
           "google.com" "amazon.com" "microsoft.com" "apple.com" \
           "facebook.com" "instagram.com" "twitter.com" "linkedin.com" \
           "github.com" "stackoverflow.com" "wikipedia.org" "youtube.com" \
@@ -85,20 +89,20 @@ services:
           "openai.com" "naver.com" "daum.net" "kakao.com" "samsung.com" "lg.com"
 
         echo "Adding whitelist patterns..."
-        redis-cli -h redis -p 6379 SADD "wegis:whitelist:patterns" \
+        redis-cli -h redis -p 6379 -n ${REDIS_DB:-0} SADD "wegis:whitelist:patterns" \
           "*.google.com" "*.amazon.com" "*.microsoft.com" "*.apple.com" \
           "*.github.com" "*.stackoverflow.com" "*.wikipedia.org" \
           "*.youtube.com" "*.naver.com" "*.kakao.com"
 
         echo "Initializing empty blacklist keys..."
-        redis-cli -h redis -p 6379 SADD "wegis:blacklist:domains" "__placeholder__"
-        redis-cli -h redis -p 6379 SREM "wegis:blacklist:domains" "__placeholder__"
-        redis-cli -h redis -p 6379 SADD "wegis:blacklist:patterns" "__placeholder__"
-        redis-cli -h redis -p 6379 SREM "wegis:blacklist:patterns" "__placeholder__"
+        redis-cli -h redis -p 6379 -n ${REDIS_DB:-0} SADD "wegis:blacklist:domains" "__placeholder__"
+        redis-cli -h redis -p 6379 -n ${REDIS_DB:-0} SREM "wegis:blacklist:domains" "__placeholder__"
+        redis-cli -h redis -p 6379 -n ${REDIS_DB:-0} SADD "wegis:blacklist:patterns" "__placeholder__"
+        redis-cli -h redis -p 6379 -n ${REDIS_DB:-0} SREM "wegis:blacklist:patterns" "__placeholder__"
 
         echo "Redis initialization completed!"
-        echo "Whitelist domains count: $(redis-cli -h redis -p 6379 SCARD wegis:whitelist:domains)"
-        echo "Whitelist patterns count: $(redis-cli -h redis -p 6379 SCARD wegis:whitelist:patterns)"
+        echo "Whitelist domains count: $(redis-cli -h redis -p 6379 -n ${REDIS_DB:-0} SCARD wegis:whitelist:domains)"
+        echo "Whitelist patterns count: $(redis-cli -h redis -p 6379 -n ${REDIS_DB:-0} SCARD wegis:whitelist:patterns)"
         echo "Blacklist keys initialized (empty)"
       '
     restart: "no"
@@ -111,6 +115,13 @@ services:
     container_name: wegis_server
     env_file:
       - .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      MONGODB_HOST: mongodb
+      MONGODB_PORT: 27017
     ports:
       - "9000:9000"
     volumes:
@@ -127,7 +138,16 @@ services:
         condition: service_healthy
       redis-init:
         condition: service_completed_successfully
-    command: ["uvicorn", "src.server:app", "--host", "0.0.0.0", "--port", "9000", "--reload"]
+    command:
+      [
+        "uvicorn",
+        "src.server:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "9000",
+        "--reload",
+      ]
 
 networks:
   wegis_network:

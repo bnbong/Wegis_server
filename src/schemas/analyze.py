@@ -3,18 +3,24 @@
 #
 # @author bnbong bbbong9@gmail.com
 # --------------------------------------------------------------------------
-from pydantic import BaseModel, Field
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Annotated
+
+from pydantic import BaseModel, Field, StringConstraints
+
+
+NonEmptyURL = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class PhishingDetectionRequest(BaseModel):
-    url: str
+    url: NonEmptyURL
 
 
 class PhishingDetectionResponse(BaseModel):
+    url: str = ""
     result: bool
     confidence: float
     source: str
+    fetch_mode: str | None = None
 
 
 class PhishingURLListResponse(BaseModel):

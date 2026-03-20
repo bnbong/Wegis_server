@@ -318,7 +318,6 @@ class TestAnalyzerWorkflow:
             patch("src.services.analyzer.get_redis") as mock_get_redis,
             patch("src.services.analyzer.DomainChecker") as mock_domain_checker_class,
             patch("src.services.analyzer.HTMLLoader"),
-            patch("src.services.analyzer.PhishingDetector"),
         ):
             # Redis client mocking
             mock_redis = AsyncMock()
