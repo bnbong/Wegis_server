@@ -11,7 +11,6 @@ from fastapi import Request
 from typing import Awaitable, Callable, Optional, Type
 
 from src.database import DBManager
-from src.services.html.loader import HTMLLoader
 from src.services.domain_checker import DomainChecker
 from src.schemas.analyze import PhishingDetectionResponse
 from src.clients.redis import get_redis
@@ -28,7 +27,6 @@ class AnalyzerService:
     _inflight_tasks: dict[str, asyncio.Future[PhishingDetectionResponse]] = {}
 
     def __init__(self):
-        self.loader = HTMLLoader()
         self.fetcher = HybridFetcher()
         self.browser_semaphore = asyncio.Semaphore(settings.MAX_BROWSER_CONCURRENCY)
         self.infer_semaphore = asyncio.Semaphore(settings.MAX_INFER_CONCURRENCY)
@@ -48,15 +46,18 @@ class AnalyzerService:
         key: str,
         work: Callable[[], Awaitable[PhishingDetectionResponse]],
     ) -> PhishingDetectionResponse:
+        task: asyncio.Future[PhishingDetectionResponse] | None = None
         async with self._inflight_lock:
             existing = self._inflight_tasks.get(key)
-            if existing is not None:
-                return await asyncio.shield(existing)
+            if existing is None:
+                task = asyncio.get_running_loop().create_future()
+                self._inflight_tasks[key] = task
 
-            task = asyncio.get_running_loop().create_future()
-            self._inflight_tasks[key] = task
+        if existing is not None:
+            return await asyncio.shield(existing)
 
         try:
+            assert task is not None
             result = await work()
             task.set_result(result)
             return result
@@ -140,13 +141,14 @@ class AnalyzerService:
         response_model: Type[PhishingDetectionResponse] = PhishingDetectionResponse,
         db_manager: Optional[DBManager] = None,
     ) -> PhishingDetectionResponse:
-        canonical_url = canonicalize_url(url)
-        logger.info(f"Analyzing URL: {url} (canonical: {canonical_url})")
+        input_url = url.strip()
+        canonical_url = canonicalize_url(input_url)
+        logger.info(f"Analyzing URL: {input_url} (canonical: {canonical_url})")
 
         redis_client = await get_redis()
         domain_checker = DomainChecker(redis_client)
 
-        if await domain_checker.is_whitelisted(canonical_url):
+        if await domain_checker.is_whitelisted(input_url):
             logger.info(f"URL {canonical_url} is in whitelist")
             return response_model.model_validate(
                 {
@@ -158,7 +160,7 @@ class AnalyzerService:
                 }
             )
 
-        if await domain_checker.is_blacklisted(canonical_url):
+        if await domain_checker.is_blacklisted(input_url):
             logger.info(f"URL {canonical_url} is in blacklist")
             return response_model.model_validate(
                 {
@@ -200,7 +202,7 @@ class AnalyzerService:
                 )
 
             if not self._has_real_predict_from_html(detector):
-                model_result = await asyncio.to_thread(detector.predict, canonical_url)
+                model_result = await asyncio.to_thread(detector.predict, input_url)
                 if model_result.get("confidence") is None:
                     return response_model.model_validate(
                         {
@@ -241,7 +243,7 @@ class AnalyzerService:
                 )
 
             timer.start("html_fetch")
-            html_content, fetch_mode = await self._fetch_html_once(canonical_url)
+            html_content, fetch_mode = await self._fetch_html_once(input_url)
             timer.stop("html_fetch")
             if not html_content:
                 return response_model.model_validate(
@@ -257,7 +259,7 @@ class AnalyzerService:
             async with self.infer_semaphore:
                 model_result = await self._predict_model(
                     detector,
-                    canonical_url,
+                    input_url,
                     html_content,
                 )
 

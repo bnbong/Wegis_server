@@ -116,10 +116,10 @@ async def domain_checker(mock_redis):
 def analyzer_service():
     """AnalyzerService instance fixture
 
-    Create AnalyzerService with mocked HTMLLoader.
+    Create AnalyzerService with BrowserFetcher HTMLLoader mocked.
     PhishingDetector is no longer imported in analyzer.py; model is injected via request.app.state.
     """
-    with patch("src.services.analyzer.HTMLLoader"):
+    with patch("src.services.fetchers.browser_fetcher.HTMLLoader"):
         return AnalyzerService()
 
 
