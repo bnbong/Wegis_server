@@ -32,6 +32,7 @@ jobs:
       APP_PORT: ${{ secrets.APP_PORT != '' && secrets.APP_PORT || '9000' }}
       REDIS_CONTAINER_NAME: ${{ secrets.REDIS_CONTAINER_NAME != '' && secrets.REDIS_CONTAINER_NAME || 'vm2-redis' }}
       DEPLOY_DOCKER_NETWORK: ${{ secrets.DEPLOY_DOCKER_NETWORK }}
+      MODEL_OBJECT_URL: https://objectstorage.ap-chuncheon-1.oraclecloud.com/n/ax7fochl5tqv/b/qshing-ai-bucket/o/best_acc_model.pt
 
     steps:
       - name: Checkout deployment revision
@@ -71,11 +72,16 @@ jobs:
       - name: Build and replace app container
         run: |
           ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "DEPLOY_PATH='$DEPLOY_PATH' DEPLOY_REVISION='$DEPLOY_REVISION' CONTAINER_NAME='$CONTAINER_NAME' IMAGE_NAME='$IMAGE_NAME' APP_PORT='$APP_PORT' REDIS_CONTAINER_NAME='$REDIS_CONTAINER_NAME' DEPLOY_DOCKER_NETWORK='$DEPLOY_DOCKER_NETWORK' bash -s" <<'EOF'
+            "DEPLOY_PATH='$DEPLOY_PATH' DEPLOY_REVISION='$DEPLOY_REVISION' CONTAINER_NAME='$CONTAINER_NAME' IMAGE_NAME='$IMAGE_NAME' APP_PORT='$APP_PORT' REDIS_CONTAINER_NAME='$REDIS_CONTAINER_NAME' DEPLOY_DOCKER_NETWORK='$DEPLOY_DOCKER_NETWORK' MODEL_OBJECT_URL='$MODEL_OBJECT_URL' bash -s" <<'EOF'
           set -euo pipefail
 
           cd "$DEPLOY_PATH"
           mkdir -p models log
+
+          MODEL_PATH="$DEPLOY_PATH/models/best_acc_model.pt"
+          echo "Downloading AI model checkpoint to $MODEL_PATH"
+          curl -fL "$MODEL_OBJECT_URL" -o "$MODEL_PATH"
+          ls -lh "$MODEL_PATH"
 
           IMAGE_TAG="${IMAGE_NAME}:${DEPLOY_REVISION}"
           BACKUP_CONTAINER="${CONTAINER_NAME}_backup_${DEPLOY_REVISION:0:7}"
@@ -101,6 +107,8 @@ jobs:
             --restart unless-stopped
             --env-file .env
             -p "${APP_PORT}:9000"
+            -v "$DEPLOY_PATH/models:/app/models:ro"
+            -v "$DEPLOY_PATH/log:/app/log"
           )
 
           if [ -n "$NETWORK_NAME" ]; then
