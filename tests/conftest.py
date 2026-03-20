@@ -120,7 +120,9 @@ def analyzer_service():
     PhishingDetector is no longer imported in analyzer.py; model is injected via request.app.state.
     """
     with patch("src.services.fetchers.browser_fetcher.HTMLLoader"):
-        return AnalyzerService()
+        service = AnalyzerService()
+        yield service
+        service.close()
 
 
 @pytest.fixture

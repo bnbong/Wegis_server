@@ -11,6 +11,7 @@ from fastapi import Request
 from typing import Awaitable, Callable, Optional, Type
 
 from src.database import DBManager
+from src.exceptions import BackendExceptions
 from src.services.domain_checker import DomainChecker
 from src.schemas.analyze import PhishingDetectionResponse
 from src.clients.redis import get_redis
@@ -24,12 +25,15 @@ logger = logging.getLogger("main")
 
 class AnalyzerService:
     _inflight_lock = asyncio.Lock()
-    _inflight_tasks: dict[str, asyncio.Future[PhishingDetectionResponse]] = {}
+    _inflight_tasks: dict[str, asyncio.Task[PhishingDetectionResponse]] = {}
 
     def __init__(self):
         self.fetcher = HybridFetcher()
         self.browser_semaphore = asyncio.Semaphore(settings.MAX_BROWSER_CONCURRENCY)
         self.infer_semaphore = asyncio.Semaphore(settings.MAX_INFER_CONCURRENCY)
+
+    def close(self) -> None:
+        self.fetcher.close()
 
     @staticmethod
     def _has_real_predict_from_html(detector) -> bool:
@@ -41,32 +45,37 @@ class AnalyzerService:
             return False
         return True
 
+    async def _cleanup_inflight_task(
+        self,
+        key: str,
+        task: asyncio.Task[PhishingDetectionResponse],
+    ) -> None:
+        try:
+            task.exception()
+        except asyncio.CancelledError:
+            pass
+
+        async with self._inflight_lock:
+            if self._inflight_tasks.get(key) is task:
+                self._inflight_tasks.pop(key, None)
+
     async def _run_inflight_deduplicated(
         self,
         key: str,
         work: Callable[[], Awaitable[PhishingDetectionResponse]],
     ) -> PhishingDetectionResponse:
-        task: asyncio.Future[PhishingDetectionResponse] | None = None
         async with self._inflight_lock:
             existing = self._inflight_tasks.get(key)
             if existing is None:
-                task = asyncio.get_running_loop().create_future()
-                self._inflight_tasks[key] = task
+                existing = asyncio.create_task(work())
+                self._inflight_tasks[key] = existing
+                existing.add_done_callback(
+                    lambda task, inflight_key=key: asyncio.create_task(
+                        self._cleanup_inflight_task(inflight_key, task)
+                    )
+                )
 
-        if existing is not None:
-            return await asyncio.shield(existing)
-
-        try:
-            assert task is not None
-            result = await work()
-            task.set_result(result)
-            return result
-        except Exception as exc:
-            task.set_exception(exc)
-            raise
-        finally:
-            async with self._inflight_lock:
-                self._inflight_tasks.pop(key, None)
+        return await asyncio.shield(existing)
 
     async def _fetch_html_once(self, url: str) -> tuple[str | None, str]:
         http_result = await asyncio.to_thread(self.fetcher.http_fetcher.fetch, url)
@@ -134,6 +143,27 @@ class AnalyzerService:
         legacy_result.setdefault("infer_ms", 0.0)
         return legacy_result
 
+    def _record_perf(
+        self,
+        *,
+        url: str,
+        source: str,
+        timer: StageTimer,
+        fetch_mode: str | None,
+        cache_hit: bool,
+    ) -> None:
+        if not settings.ENABLE_PERF_RECORDS:
+            return
+
+        record = build_perf_record(
+            url=url,
+            source=source,
+            timer=timer,
+            fetch_mode=fetch_mode,
+            cache_hit=cache_hit,
+        )
+        log_perf_record(record)
+
     async def analyze(
         self,
         url: str,
@@ -142,6 +172,8 @@ class AnalyzerService:
         db_manager: Optional[DBManager] = None,
     ) -> PhishingDetectionResponse:
         input_url = url.strip()
+        if not input_url:
+            raise BackendExceptions("URL must not be empty")
         canonical_url = canonicalize_url(input_url)
         logger.info(f"Analyzing URL: {input_url} (canonical: {canonical_url})")
 
@@ -183,14 +215,13 @@ class AnalyzerService:
             cached_result = await db_manager.get_cached_result(canonical_url)
             timer.stop("cache_lookup")
             if cached_result:
-                record = build_perf_record(
+                self._record_perf(
                     url=canonical_url,
                     source="cache",
                     timer=timer,
                     fetch_mode="none",
                     cache_hit=True,
                 )
-                log_perf_record(record)
                 return response_model.model_validate(
                     {
                         "url": canonical_url,
@@ -223,14 +254,13 @@ class AnalyzerService:
                     timer=timer,
                 )
 
-                record = build_perf_record(
+                self._record_perf(
                     url=canonical_url,
                     source="model",
                     timer=timer,
                     fetch_mode="none",
                     cache_hit=False,
                 )
-                log_perf_record(record)
 
                 return response_model.model_validate(
                     {
@@ -286,14 +316,13 @@ class AnalyzerService:
                 timer=timer,
             )
 
-            record = build_perf_record(
+            self._record_perf(
                 url=canonical_url,
                 source="model",
                 timer=timer,
                 fetch_mode=fetch_mode,
                 cache_hit=False,
             )
-            log_perf_record(record)
 
             return response_model.model_validate(
                 {

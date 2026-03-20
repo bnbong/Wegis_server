@@ -3,6 +3,8 @@
 #
 # @author bnbong bbbong9@gmail.com
 # --------------------------------------------------------------------------
+from __future__ import annotations
+
 import os
 import secrets
 import warnings
@@ -140,6 +142,7 @@ class Settings(BaseSettings):
     MODEL_CACHE_SIZE: int = 1
 
     BENCHMARK_OUTPUT_DIR: str = os.getenv("BENCHMARK_OUTPUT_DIR", "./log/benchmarks")
+    ENABLE_PERF_RECORDS: bool | None = None
 
     CHROME_PROCESS_TIMEOUT: int = 30
     CHROME_MAX_INSTANCES: int = 2
@@ -157,6 +160,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _enforce_non_default_secrets(self) -> Self:
+        if self.ENABLE_PERF_RECORDS is None:
+            self.ENABLE_PERF_RECORDS = self.ENVIRONMENT != "production"
         self._check_default_secret("SECRET_KEY", self.SECRET_KEY)
         return self
 

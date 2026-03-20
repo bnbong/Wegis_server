@@ -48,7 +48,7 @@ class TestAnalyzeEndpoints:
         ]
 
         with (
-            patch("src.api.routes.analyze.settings.ENVIRONMENT", "test"),
+            patch("src.api.routes.analyze.settings.ENABLE_PERF_RECORDS", True),
             patch(
                 "src.api.routes.analyze.perf_store.list",
                 new=AsyncMock(return_value=records),
@@ -64,7 +64,7 @@ class TestAnalyzeEndpoints:
     def test_clear_perf_records(self, client):
         """Performance record clear test"""
         with (
-            patch("src.api.routes.analyze.settings.ENVIRONMENT", "test"),
+            patch("src.api.routes.analyze.settings.ENABLE_PERF_RECORDS", True),
             patch(
                 "src.api.routes.analyze.perf_store.clear",
                 new=AsyncMock(return_value=None),
@@ -78,7 +78,7 @@ class TestAnalyzeEndpoints:
 
     def test_perf_records_forbidden_in_production(self, client):
         """Performance record endpoint should be blocked in production"""
-        with patch("src.api.routes.analyze.settings.ENVIRONMENT", "production"):
+        with patch("src.api.routes.analyze.settings.ENABLE_PERF_RECORDS", False):
             response = client.get("/analyze/perf/records")
 
         assert response.status_code == 403
@@ -127,6 +127,23 @@ class TestAnalyzeEndpoints:
             assert data["data"]["result"] is True
             assert data["data"]["confidence"] == 0.85
             assert data["data"]["source"] == "model"
+
+    def test_check_single_url_rejects_blank_url(self, client, mock_db_manager):
+        """Blank URL input should fail validation"""
+        with patch("src.api.deps.DBManager", return_value=mock_db_manager):
+            response = client.post("/analyze/check", json={"url": "   "})
+
+        assert response.status_code == 422
+
+    def test_check_batch_urls_rejects_blank_item(self, client, mock_db_manager):
+        """Blank batch item should fail validation"""
+        with patch("src.api.deps.DBManager", return_value=mock_db_manager):
+            response = client.post(
+                "/analyze/batch",
+                json=["https://ok.com", "   ", "https://still-ok.com"],
+            )
+
+        assert response.status_code == 422
 
     def test_check_batch_urls(self, client, mock_db_manager):
         """Batch URL analysis test"""

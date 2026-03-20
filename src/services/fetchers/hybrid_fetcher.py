@@ -12,6 +12,9 @@ class HybridFetcher:
         self.http_fetcher = http_fetcher or HTTPFetcher()
         self.browser_fetcher = BrowserFetcher()
 
+    def close(self) -> None:
+        self.http_fetcher.close()
+
     @staticmethod
     def _is_low_quality_html(html: str) -> bool:
         stripped = html.strip()

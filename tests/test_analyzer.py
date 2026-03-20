@@ -8,6 +8,7 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
+from src.exceptions import BackendExceptions
 from src.schemas.analyze import PhishingDetectionResponse
 
 
@@ -151,6 +152,21 @@ class TestAnalyzerService:
             mock_db_manager.cache_result.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_analyze_rejects_blank_url(
+        self, analyzer_service, mock_request, mock_db_manager
+    ):
+        """Blank URL should be rejected before cache lookup or model execution"""
+        with pytest.raises(BackendExceptions, match="URL must not be empty"):
+            await analyzer_service.analyze(
+                url="   ",
+                request=mock_request,
+                db_manager=mock_db_manager,
+            )
+
+        mock_db_manager.get_cached_result.assert_not_called()
+        mock_request.app.state.model.predict.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_analyze_legacy_predict_uses_input_url_and_persists_canonical_url(
         self, analyzer_service, mock_request, mock_db_manager
     ):
@@ -262,6 +278,7 @@ class TestAnalyzerService:
         analyzer_service.fetcher.browser_fetcher.fetch = MagicMock()
 
         with (
+            patch("src.services.analyzer.settings.ENABLE_PERF_RECORDS", True),
             patch("src.services.analyzer.get_redis") as mock_get_redis,
             patch("src.services.analyzer.DomainChecker") as mock_domain_checker_class,
             patch("src.services.analyzer.log_perf_record") as mock_log_perf_record,
@@ -364,3 +381,72 @@ class TestAnalyzerService:
 
         assert first_result.url == "https://first.test/"
         assert duplicate_result.url == "https://first.test/"
+
+    @pytest.mark.asyncio
+    async def test_inflight_dedup_survives_waiter_cancellation(self, analyzer_service):
+        """Cancelling one waiter should not cancel the shared in-flight task"""
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def shared_work() -> PhishingDetectionResponse:
+            started.set()
+            await release.wait()
+            return PhishingDetectionResponse(
+                url="https://shared.test/",
+                result=True,
+                confidence=0.8,
+                source="model",
+                fetch_mode="none",
+            )
+
+        first_waiter = asyncio.create_task(
+            analyzer_service._run_inflight_deduplicated("shared-key", shared_work)
+        )
+        await started.wait()
+
+        second_waiter = asyncio.create_task(
+            analyzer_service._run_inflight_deduplicated("shared-key", shared_work)
+        )
+
+        first_waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first_waiter
+
+        release.set()
+        second_result = await asyncio.wait_for(second_waiter, timeout=0.2)
+        assert second_result.url == "https://shared.test/"
+
+    @pytest.mark.asyncio
+    async def test_perf_recording_can_be_disabled(
+        self, analyzer_service, mock_request, mock_db_manager
+    ):
+        """Perf record creation should be skipped when the flag is disabled"""
+        mock_db_manager.get_cached_result.return_value = {
+            "is_phishing": True,
+            "confidence": 0.75,
+        }
+
+        with (
+            patch("src.services.analyzer.settings.ENABLE_PERF_RECORDS", False),
+            patch("src.services.analyzer.get_redis") as mock_get_redis,
+            patch("src.services.analyzer.DomainChecker") as mock_domain_checker_class,
+            patch("src.services.analyzer.build_perf_record") as mock_build_perf_record,
+            patch("src.services.analyzer.log_perf_record") as mock_log_perf_record,
+        ):
+            mock_redis = AsyncMock()
+            mock_get_redis.return_value = mock_redis
+
+            mock_domain_checker = AsyncMock()
+            mock_domain_checker.is_whitelisted.return_value = False
+            mock_domain_checker.is_blacklisted.return_value = False
+            mock_domain_checker_class.return_value = mock_domain_checker
+
+            result = await analyzer_service.analyze(
+                url="https://cached-site.com",
+                request=mock_request,
+                db_manager=mock_db_manager,
+            )
+
+            assert result.source == "cache"
+            mock_build_perf_record.assert_not_called()
+            mock_log_perf_record.assert_not_called()

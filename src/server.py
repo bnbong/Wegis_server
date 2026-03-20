@@ -57,6 +57,12 @@ async def lifespan(app: FastAPI):
             app.state.db_manager.close()
 
         # Unload AI model
+        if (
+            hasattr(app.state, "analyzer_service")
+            and app.state.analyzer_service is not None
+        ):
+            logger.info("Closing analyzer service...")
+            app.state.analyzer_service.close()
         app.state.model = None
         app.state.analyzer_service = None
         logger.info("AI model unloaded")

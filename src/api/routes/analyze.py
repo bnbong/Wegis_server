@@ -15,6 +15,7 @@ from src.schemas.analyze import (
     PhishingURLListResponse,
     PhishingDetectionRequest,
     PhishingDetectionResponse,
+    NonEmptyURL,
 )
 from src.enums import ResponseMessage
 from src.api.deps import get_db_manager
@@ -29,7 +30,7 @@ router = APIRouter(prefix="/analyze", tags=["analyze"])
 
 
 def ensure_perf_records_access() -> None:
-    if settings.ENVIRONMENT == "production":
+    if not settings.ENABLE_PERF_RECORDS:
         raise HTTPException(status_code=403, detail="Performance records unavailable")
 
 
@@ -131,7 +132,7 @@ async def check_url(
 
 @router.post("/batch", response_model=ResponseSchema[List[PhishingDetectionResponse]])
 async def check_urls_batch(
-    urls: List[str],
+    urls: List[NonEmptyURL],
     request: Request,
     db_manager: DBManager = Depends(get_db_manager),
 ):
