@@ -40,13 +40,13 @@ class DataPreprocessor:
         content = converter.handle(self.html)
         sentences = re.split(r"(?<=[.!?]) +", content)
 
-        contents = [s for s in sentences if s.strip()]
-        merged = " ".join(contents[:20])
-        try:
-            if merged and detect(merged) != "en":
-                contents = contents[:10]
-        except Exception:
-            contents = contents[:10]
+        contents = []
+        for s in sentences:
+            try:
+                if detect(s) == "en":
+                    contents.append(s)
+            except Exception:
+                continue
 
         text = "[CLS]" + "[SEP]".join(contents)
         html_tokens = self.html_tokenizer(
