@@ -6,6 +6,13 @@ on:
       - CI
     types:
       - completed
+  workflow_dispatch:
+    inputs:
+      deploy_ref:
+        description: Git ref to deploy
+        required: false
+        default: main
+        type: string
 
 concurrency:
   group: production-deploy
@@ -14,8 +21,11 @@ concurrency:
 jobs:
   deploy:
     if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main'
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: production
@@ -26,7 +36,7 @@ jobs:
       DEPLOY_PORT: ${{ secrets.DEPLOY_PORT != '' && secrets.DEPLOY_PORT || '22' }}
       DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
       DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-      DEPLOY_REVISION: ${{ github.event.workflow_run.head_sha }}
+      DEPLOY_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_ref || github.event.workflow_run.head_sha }}
       CONTAINER_NAME: ${{ secrets.APP_CONTAINER_NAME != '' && secrets.APP_CONTAINER_NAME || 'wegis_server' }}
       IMAGE_NAME: ${{ secrets.APP_IMAGE_NAME != '' && secrets.APP_IMAGE_NAME || 'wegis-server' }}
       APP_PORT: ${{ secrets.APP_PORT != '' && secrets.APP_PORT || '9000' }}
@@ -38,7 +48,10 @@ jobs:
       - name: Checkout deployment revision
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ env.DEPLOY_REF }}
+
+      - name: Resolve deployment revision
+        run: echo "DEPLOY_REVISION=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Configure SSH
         run: |
@@ -79,8 +92,21 @@ jobs:
           mkdir -p models log
 
           MODEL_PATH="$DEPLOY_PATH/models/best_acc_model.pt"
+          MODEL_DIR="$(dirname "$MODEL_PATH")"
+          MODEL_TMP="$(mktemp /tmp/wegis-model.XXXXXX.pt)"
+          trap 'rm -f "$MODEL_TMP"' EXIT
+
+          if [ ! -w "$MODEL_DIR" ]; then
+            echo "Model directory is not writable: $MODEL_DIR"
+            ls -ld "$MODEL_DIR" || true
+            exit 1
+          fi
+
           echo "Downloading AI model checkpoint to $MODEL_PATH"
-          curl -fL "$MODEL_OBJECT_URL" -o "$MODEL_PATH"
+          curl -fL "$MODEL_OBJECT_URL" -o "$MODEL_TMP"
+          rm -f "$MODEL_PATH"
+          mv "$MODEL_TMP" "$MODEL_PATH"
+          chmod 644 "$MODEL_PATH"
           ls -lh "$MODEL_PATH"
 
           IMAGE_TAG="${IMAGE_NAME}:${DEPLOY_REVISION}"
