@@ -99,10 +99,3 @@ class HTMLLoader:
                     except Exception:
                         pass
         return ""
-
-    def __del__(self):
-        return None
-
-    @staticmethod
-    def get_instance():
-        return HTMLLoader()

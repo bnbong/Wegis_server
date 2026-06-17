@@ -37,26 +37,6 @@ services:
       timeout: 3s
       retries: 3
 
-  # MongoDB for Testing
-  mongodb-test:
-    image: mongo:7
-    container_name: wegis_mongodb_test
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: test_admin
-      MONGO_INITDB_ROOT_PASSWORD: test_password
-      MONGO_INITDB_DATABASE: test_phishing_feedback
-    ports:
-      - "27018:27017"
-    networks:
-      - wegis_test_network
-    tmpfs:
-      - /data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 5s
-      timeout: 3s
-      retries: 3
-
 networks:
   wegis_test_network:
     driver: bridge

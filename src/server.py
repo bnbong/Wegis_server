@@ -10,17 +10,17 @@ from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
 from src.core.config import settings
-from src.logger import Logger
+from src.logger import setup_logger
 from src.database import DBManager
 from src.services.model.manager import PhishingDetector
 from src.services.analyzer import AnalyzerService
-from src.orm_models import UserFeedback
 from src.api.main import router as api_router
 from src.clients.redis import init_redis, close_redis
-from src.clients.mongo import init_mongo, close_mongo
 
 
-logger = Logger(file_path=f"./log/{datetime.now().strftime('%Y-%m-%d')}", name="main")
+logger = setup_logger(
+    name="main", file_path=f"./log/{datetime.now().strftime('%Y-%m-%d')}"
+)
 
 
 @asynccontextmanager
@@ -31,10 +31,6 @@ async def lifespan(app: FastAPI):
         # Initialize Redis client
         logger.info("Initializing Redis connection...")
         await init_redis()
-
-        # Initialize MongoDB client and Beanie
-        logger.info("Initializing MongoDB connection...")
-        await init_mongo(document_models=[UserFeedback])
 
         # Initialize PostgreSQL database manager
         logger.info("Initializing PostgreSQL database manager...")
@@ -66,10 +62,6 @@ async def lifespan(app: FastAPI):
         app.state.model = None
         app.state.analyzer_service = None
         logger.info("AI model unloaded")
-
-        # Close MongoDB connection
-        logger.info("Closing MongoDB connection...")
-        await close_mongo()
 
         # Close Redis connection
         logger.info("Closing Redis connection...")

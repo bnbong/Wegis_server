@@ -4,19 +4,13 @@
 # @author bnbong bbbong9@gmail.com
 # --------------------------------------------------------------------------
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Optional
 
-from beanie import Document
-from pydantic import Field
 from sqlmodel import Field as SQLField
 from sqlmodel import SQLModel
 
 
-class Base(SQLModel):
-    pass
-
-
-class PhishingURL(Base, table=True):
+class PhishingURL(SQLModel, table=True):
     """Phishing URL data model"""
 
     __tablename__ = "phishing_urls"
@@ -28,19 +22,3 @@ class PhishingURL(Base, table=True):
     detection_time: datetime = SQLField(default_factory=datetime.now)
     html_content: Optional[str] = None
     features: Optional[str] = None  # JSON
-
-
-# MongoDB model
-class UserFeedback(Document):
-    """User feedback data model"""
-
-    url: str
-    is_correct: bool
-    detected_result: bool
-    confidence: float
-    user_comment: Optional[str] = None
-    feedback_time: datetime = Field(default_factory=datetime.now)
-    metadata: Optional[Dict] = None
-
-    class Settings:
-        name = "user_feedback"

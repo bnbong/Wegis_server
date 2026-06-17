@@ -9,7 +9,7 @@ from typing import Dict
 from fastapi import APIRouter, HTTPException, Request, status
 
 from src.exceptions import BackendExceptions
-from src.api.routes import analyze, feedback
+from src.api.routes import analyze
 
 router = APIRouter()
 
@@ -51,4 +51,3 @@ def health_check(request: Request) -> Dict[str, str]:
 
 
 router.include_router(analyze.router)
-router.include_router(feedback.router)

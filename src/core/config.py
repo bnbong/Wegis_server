@@ -80,10 +80,9 @@ class Settings(BaseSettings):
             f"Please ensure the model file exists in the 'models/' directory."
         )
 
-    HTML_LOAD_TIMEOUT: int = int(os.getenv("HTML_LOAD_TIMEOUT", "20"))
-    HTML_LOAD_RETRIES: int = int(os.getenv("HTML_LOAD_RETRIES", "2"))
+    HTML_LOAD_TIMEOUT: int = 20
+    HTML_LOAD_RETRIES: int = 2
 
-    CHROME_BIN: str = "/usr/bin/chromium"
     CHROMEDRIVER_PATH: str = "/usr/bin/chromedriver"
 
     DOMAIN_ENABLE_PATTERNS: bool = True
@@ -92,9 +91,8 @@ class Settings(BaseSettings):
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379
     REDIS_DB: int = 0
-    REDIS_CACHE_TTL: int = int(os.getenv("REDIS_CACHE_TTL", "43200"))
-    REDIS_CACHE_TTL_PHISHING: int = int(os.getenv("REDIS_CACHE_TTL_PHISHING", "86400"))
-    REDIS_CACHE_TTL_BENIGN: int = int(os.getenv("REDIS_CACHE_TTL_BENIGN", "1800"))
+    REDIS_CACHE_TTL_PHISHING: int = 86400
+    REDIS_CACHE_TTL_BENIGN: int = 1800
     REDIS_NAMESPACE: str = "wegis"
     REDIS_MAX_CONNECTIONS: int = 10
     REDIS_RETRY_ON_TIMEOUT: bool = True
@@ -106,8 +104,6 @@ class Settings(BaseSettings):
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
     POSTGRES_DB: str = "phishing_data"
-    POSTGRES_POOL_SIZE: int = 5
-    POSTGRES_MAX_OVERFLOW: int = 10
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -121,31 +117,11 @@ class Settings(BaseSettings):
             path=self.POSTGRES_DB,
         )
 
-    # MongoDB
-    MONGODB_USER: str = "admin"
-    MONGODB_PASSWORD: str = "password"
-    MONGODB_HOST: str = "localhost"
-    MONGODB_PORT: int = 27017
-    MONGODB_NAME: str = "phishing_feedback"
-    MONGODB_MAX_POOL_SIZE: int = 10
-    MONGODB_MIN_POOL_SIZE: int = 1
-    MONGODB_SERVER_SELECTION_TIMEOUT: int = 5000
+    MAX_BROWSER_CONCURRENCY: int = 2
+    MAX_INFER_CONCURRENCY: int = 4
 
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def MONGODB_URI(self) -> str:
-        return f"mongodb://{self.MONGODB_USER}:{self.MONGODB_PASSWORD}@{self.MONGODB_HOST}:{self.MONGODB_PORT}/{self.MONGODB_NAME}?authSource=admin&maxPoolSize={self.MONGODB_MAX_POOL_SIZE}&minPoolSize={self.MONGODB_MIN_POOL_SIZE}&serverSelectionTimeoutMS={self.MONGODB_SERVER_SELECTION_TIMEOUT}"
-
-    MAX_CONCURRENT_REQUESTS: int = 5
-    MAX_BROWSER_CONCURRENCY: int = int(os.getenv("MAX_BROWSER_CONCURRENCY", "2"))
-    MAX_INFER_CONCURRENCY: int = int(os.getenv("MAX_INFER_CONCURRENCY", "4"))
-    MODEL_CACHE_SIZE: int = 1
-
-    BENCHMARK_OUTPUT_DIR: str = os.getenv("BENCHMARK_OUTPUT_DIR", "./log/benchmarks")
+    BENCHMARK_OUTPUT_DIR: str = "./log/benchmarks"
     ENABLE_PERF_RECORDS: bool | None = None
-
-    CHROME_PROCESS_TIMEOUT: int = 30
-    CHROME_MAX_INSTANCES: int = 2
 
     def _check_default_secret(self, var_name: str, value: str | None) -> None:
         if value == "changethis":

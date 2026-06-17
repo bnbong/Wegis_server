@@ -234,15 +234,3 @@ class TestAnalyzeEndpoints:
             # Validate third result
             assert data["data"][2]["result"] is False
             assert data["data"][2]["confidence"] == 0.15
-
-
-class TestFeedbackEndpoints:
-    """Feedback endpoint test"""
-
-    def test_feedback_endpoints_exist(self, client):
-        """Feedback endpoint existence test (simple test)"""
-        # Check if feedback endpoint exists
-        response = client.get("/docs")  # OpenAPI document check
-        assert response.status_code == 200
-
-    # TODO: implement more detailed test

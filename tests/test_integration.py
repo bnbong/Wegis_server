@@ -6,11 +6,9 @@
 import pytest
 import pytest_asyncio
 from unittest.mock import patch, MagicMock
-from datetime import datetime
 
 from src.core.config import settings
 from src.database import DBManager
-from src.orm_models import UserFeedback
 
 
 @pytest.mark.integration
@@ -119,44 +117,10 @@ class TestDomainCheckerIntegration:
 
 @pytest.mark.integration
 class TestDatabaseIntegration:
-    """Database integration test (PostgreSQL, Redis, MongoDB)"""
+    """Database integration test (PostgreSQL, Redis)"""
 
     @pytest_asyncio.fixture
-    async def init_beanie(self):
-        """Initialize Beanie ODM for MongoDB tests"""
-        import motor.motor_asyncio
-        from beanie import init_beanie as beanie_init
-        from src.core.config import settings
-
-        # Reset MongoDB client singleton to avoid event loop issues
-        from src.clients.mongo import _mongo_client
-
-        if _mongo_client._client is not None:
-            _mongo_client._client.close()
-        _mongo_client._client = None
-        _mongo_client._database = None
-
-        # Create a new MongoDB client for each test
-        mongo_uri = str(settings.MONGODB_URI)
-        client = motor.motor_asyncio.AsyncIOMotorClient(mongo_uri)
-        database = client[settings.MONGODB_NAME]
-
-        # Initialize Beanie
-        await beanie_init(database=database, document_models=[UserFeedback])
-
-        yield
-
-        # Clean up
-        client.close()
-
-        # Reset MongoDB client after test
-        if _mongo_client._client is not None:
-            _mongo_client._client.close()
-        _mongo_client._client = None
-        _mongo_client._database = None
-
-    @pytest_asyncio.fixture
-    async def db_manager(self, init_beanie):
+    async def db_manager(self):
         """DBManager fixture for integration test"""
         # Reset both DBManager and Redis client singleton for each test
         DBManager._reset_instance()
@@ -205,26 +169,12 @@ class TestDatabaseIntegration:
         assert saved_url.url == test_url
 
         # 2. Cache to Redis
-        await db_manager.cache_phishing_result(
-            url=test_url, is_phishing=True, confidence=0.88
-        )
+        await db_manager.cache_result(url=test_url, is_phishing=True, confidence=0.88)
 
         # 3. Retrieve from cache
         cached = await db_manager.get_cached_result(test_url)
         assert cached is not None
         assert cached["is_phishing"] is True
-
-        # 4. Save user feedback to MongoDB
-        feedback = UserFeedback(
-            url=test_url,
-            is_correct=True,  # User confirms it's phishing
-            detected_result=True,  # Model detected as phishing
-            confidence=0.88,
-            user_comment="Confirmed phishing site",
-            feedback_time=datetime.now(),
-        )
-        feedback_id = await db_manager.save_user_feedback(feedback)
-        assert feedback_id is not None
 
     @pytest.mark.asyncio
     async def test_postgresql_phishing_url_workflow(self, db_manager):
@@ -263,7 +213,7 @@ class TestDatabaseIntegration:
         test_confidence = 0.85
 
         # Cache phishing result
-        await db_manager.cache_phishing_result(
+        await db_manager.cache_result(
             url=test_url,
             is_phishing=True,
             confidence=test_confidence,
@@ -277,31 +227,6 @@ class TestDatabaseIntegration:
         assert cached_result["is_phishing"] is True
         assert cached_result["confidence"] == test_confidence
         assert "last_updated" in cached_result
-
-    @pytest.mark.asyncio
-    async def test_mongodb_feedback_workflow(self, db_manager):
-        """MongoDB user feedback save and retrieve test"""
-        # Test data
-        test_feedback = UserFeedback(
-            url="https://feedback-test-site.com",
-            is_correct=False,  # User says it's not phishing
-            detected_result=True,  # Model detected as phishing
-            confidence=0.90,
-            user_comment="This is actually a safe site, false positive",
-            feedback_time=datetime.now(),
-        )
-
-        # Save user feedback
-        feedback_id = await db_manager.save_user_feedback(test_feedback)
-        assert feedback_id is not None
-
-        # Retrieve user feedbacks
-        feedbacks = await db_manager.get_user_feedbacks(limit=10)
-        assert len(feedbacks) > 0
-
-        # Check if saved feedback is in the list
-        feedback_urls = [feedback["url"] for feedback in feedbacks]
-        assert test_feedback.url in feedback_urls
 
 
 @pytest.mark.integration

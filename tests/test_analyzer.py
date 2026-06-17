@@ -115,6 +115,19 @@ class TestAnalyzerService:
         self, analyzer_service, mock_request, mock_db_manager
     ):
         """AI model prediction analysis test"""
+        # AI model prediction result setting (HTML pipeline)
+        mock_request.app.state.model.predict_from_html.return_value = {
+            "result": True,
+            "confidence": 0.85,
+            "preprocess_ms": 1.0,
+            "infer_ms": 1.0,
+        }
+        analyzer_service.fetcher.http_fetcher.fetch = MagicMock(
+            return_value=MagicMock(html="<html>ok</html>")
+        )
+        analyzer_service.fetcher._is_low_quality_html = MagicMock(return_value=False)
+        analyzer_service.fetcher.browser_fetcher.fetch = MagicMock()
+
         with (
             patch("src.services.analyzer.get_redis") as mock_get_redis,
             patch("src.services.analyzer.DomainChecker") as mock_domain_checker_class,
@@ -128,13 +141,6 @@ class TestAnalyzerService:
             mock_domain_checker.is_whitelisted.return_value = False
             mock_domain_checker.is_blacklisted.return_value = False
             mock_domain_checker_class.return_value = mock_domain_checker
-
-            # AI model prediction result setting
-            mock_request.app.state.model.predict.return_value = {
-                "result": True,
-                "confidence": 0.85,
-            }
-            mock_request.app.state.model.html_loader = None
 
             result = await analyzer_service.analyze(
                 url="https://unknown-site.com",
@@ -164,14 +170,26 @@ class TestAnalyzerService:
             )
 
         mock_db_manager.get_cached_result.assert_not_called()
-        mock_request.app.state.model.predict.assert_not_called()
+        mock_request.app.state.model.predict_from_html.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_analyze_legacy_predict_uses_input_url_and_persists_canonical_url(
+    async def test_analyze_uses_input_url_for_inference_and_persists_canonical_url(
         self, analyzer_service, mock_request, mock_db_manager
     ):
-        """Legacy model path should keep raw input for inference and canonical URL for persistence"""
+        """Model path should keep raw input for inference and canonical URL for persistence"""
         raw_input = "www.legacy-site.com/login?b=2&a=1"
+
+        mock_request.app.state.model.predict_from_html.return_value = {
+            "result": True,
+            "confidence": 0.85,
+            "preprocess_ms": 1.0,
+            "infer_ms": 1.0,
+        }
+        analyzer_service.fetcher.http_fetcher.fetch = MagicMock(
+            return_value=MagicMock(html="<html>ok</html>")
+        )
+        analyzer_service.fetcher._is_low_quality_html = MagicMock(return_value=False)
+        analyzer_service.fetcher.browser_fetcher.fetch = MagicMock()
 
         with (
             patch("src.services.analyzer.get_redis") as mock_get_redis,
@@ -185,11 +203,6 @@ class TestAnalyzerService:
             mock_domain_checker.is_blacklisted.return_value = False
             mock_domain_checker_class.return_value = mock_domain_checker
 
-            mock_request.app.state.model.predict.return_value = {
-                "result": True,
-                "confidence": 0.85,
-            }
-
             result = await analyzer_service.analyze(
                 url=raw_input,
                 request=mock_request,
@@ -199,12 +212,14 @@ class TestAnalyzerService:
             assert result.url == "https://legacy-site.com/login?a=1&b=2"
             mock_domain_checker.is_whitelisted.assert_awaited_once_with(raw_input)
             mock_domain_checker.is_blacklisted.assert_awaited_once_with(raw_input)
-            mock_request.app.state.model.predict.assert_called_once_with(raw_input)
+            mock_request.app.state.model.predict_from_html.assert_called_once_with(
+                raw_input, "<html>ok</html>"
+            )
             mock_db_manager.save_phishing_url.assert_called_once_with(
                 "https://legacy-site.com/login?a=1&b=2",
                 True,
                 0.85,
-                None,
+                "<html>ok</html>",
             )
             mock_db_manager.cache_result.assert_called_once_with(
                 url="https://legacy-site.com/login?a=1&b=2",
@@ -217,6 +232,17 @@ class TestAnalyzerService:
         self, analyzer_service, mock_request, mock_db_manager
     ):
         """AI model prediction failure test"""
+        # AI model prediction failure (HTML pipeline)
+        mock_request.app.state.model.predict_from_html.return_value = {
+            "result": None,
+            "confidence": None,
+        }
+        analyzer_service.fetcher.http_fetcher.fetch = MagicMock(
+            return_value=MagicMock(html="<html>ok</html>")
+        )
+        analyzer_service.fetcher._is_low_quality_html = MagicMock(return_value=False)
+        analyzer_service.fetcher.browser_fetcher.fetch = MagicMock()
+
         with (
             patch("src.services.analyzer.get_redis") as mock_get_redis,
             patch("src.services.analyzer.DomainChecker") as mock_domain_checker_class,
@@ -230,12 +256,6 @@ class TestAnalyzerService:
             mock_domain_checker.is_whitelisted.return_value = False
             mock_domain_checker.is_blacklisted.return_value = False
             mock_domain_checker_class.return_value = mock_domain_checker
-
-            # AI model prediction failure
-            mock_request.app.state.model.predict.return_value = {
-                "result": None,
-                "confidence": None,
-            }
 
             result = await analyzer_service.analyze(
                 url="https://error-site.com",

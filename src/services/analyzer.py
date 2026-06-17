@@ -5,10 +5,9 @@
 # --------------------------------------------------------------------------
 import logging
 import asyncio
-import inspect
 
 from fastapi import Request
-from typing import Awaitable, Callable, Optional, Type
+from typing import Awaitable, Callable, Optional
 
 from src.database import DBManager
 from src.exceptions import BackendExceptions
@@ -34,16 +33,6 @@ class AnalyzerService:
 
     def close(self) -> None:
         self.fetcher.close()
-
-    @staticmethod
-    def _has_real_predict_from_html(detector) -> bool:
-        method = getattr(detector, "predict_from_html", None)
-        if not callable(method):
-            return False
-        module_name = getattr(type(method), "__module__", "")
-        if module_name.startswith("unittest.mock"):
-            return False
-        return True
 
     async def _cleanup_inflight_task(
         self,
@@ -112,36 +101,12 @@ class AnalyzerService:
             confidence,
             html_content,
         )
-        cache_callable = getattr(db_manager, "cache_result", None)
-        cache_kwargs = {
-            "url": url,
-            "is_phishing": result,
-            "confidence": confidence,
-        }
-        if cache_callable is None:
-            cache_callable = getattr(db_manager, "cache_phishing_result", None)
-            cache_kwargs["ttl"] = (
-                settings.REDIS_CACHE_TTL_PHISHING
-                if result
-                else settings.REDIS_CACHE_TTL_BENIGN
-            )
-
-        if cache_callable is not None:
-            cache_invocation = cache_callable(
-                **cache_kwargs,
-            )
-            if inspect.isawaitable(cache_invocation):
-                await cache_invocation
+        await db_manager.cache_result(
+            url=url,
+            is_phishing=result,
+            confidence=confidence,
+        )
         timer.stop("db_write")
-
-    async def _predict_model(self, detector, url: str, html: str) -> dict:
-        if self._has_real_predict_from_html(detector):
-            return await asyncio.to_thread(detector.predict_from_html, url, html)
-
-        legacy_result = await asyncio.to_thread(detector.predict, url)
-        legacy_result.setdefault("preprocess_ms", 0.0)
-        legacy_result.setdefault("infer_ms", 0.0)
-        return legacy_result
 
     def _record_perf(
         self,
@@ -168,7 +133,6 @@ class AnalyzerService:
         self,
         url: str,
         request: Request,
-        response_model: Type[PhishingDetectionResponse] = PhishingDetectionResponse,
         db_manager: Optional[DBManager] = None,
     ) -> PhishingDetectionResponse:
         input_url = url.strip()
@@ -182,7 +146,7 @@ class AnalyzerService:
 
         if await domain_checker.is_whitelisted(input_url):
             logger.info(f"URL {canonical_url} is in whitelist")
-            return response_model.model_validate(
+            return PhishingDetectionResponse.model_validate(
                 {
                     "url": canonical_url,
                     "result": False,
@@ -194,7 +158,7 @@ class AnalyzerService:
 
         if await domain_checker.is_blacklisted(input_url):
             logger.info(f"URL {canonical_url} is in blacklist")
-            return response_model.model_validate(
+            return PhishingDetectionResponse.model_validate(
                 {
                     "url": canonical_url,
                     "result": True,
@@ -222,7 +186,7 @@ class AnalyzerService:
                     fetch_mode="none",
                     cache_hit=True,
                 )
-                return response_model.model_validate(
+                return PhishingDetectionResponse.model_validate(
                     {
                         "url": canonical_url,
                         "result": cached_result["is_phishing"],
@@ -232,51 +196,11 @@ class AnalyzerService:
                     }
                 )
 
-            if not self._has_real_predict_from_html(detector):
-                model_result = await asyncio.to_thread(detector.predict, input_url)
-                if model_result.get("confidence") is None:
-                    return response_model.model_validate(
-                        {
-                            "url": canonical_url,
-                            "result": False,
-                            "confidence": 0.0,
-                            "source": "error",
-                            "fetch_mode": "none",
-                        }
-                    )
-
-                await self._persist_result(
-                    db_manager=db_manager,
-                    url=canonical_url,
-                    result=bool(model_result["result"]),
-                    confidence=float(model_result["confidence"]),
-                    html_content=None,
-                    timer=timer,
-                )
-
-                self._record_perf(
-                    url=canonical_url,
-                    source="model",
-                    timer=timer,
-                    fetch_mode="none",
-                    cache_hit=False,
-                )
-
-                return response_model.model_validate(
-                    {
-                        "url": canonical_url,
-                        "result": bool(model_result["result"]),
-                        "confidence": float(model_result["confidence"]),
-                        "source": "model",
-                        "fetch_mode": "none",
-                    }
-                )
-
             timer.start("html_fetch")
             html_content, fetch_mode = await self._fetch_html_once(input_url)
             timer.stop("html_fetch")
             if not html_content:
-                return response_model.model_validate(
+                return PhishingDetectionResponse.model_validate(
                     {
                         "url": canonical_url,
                         "result": False,
@@ -287,14 +211,14 @@ class AnalyzerService:
                 )
 
             async with self.infer_semaphore:
-                model_result = await self._predict_model(
-                    detector,
+                model_result = await asyncio.to_thread(
+                    detector.predict_from_html,
                     input_url,
                     html_content,
                 )
 
             if model_result["confidence"] is None:
-                return response_model.model_validate(
+                return PhishingDetectionResponse.model_validate(
                     {
                         "url": canonical_url,
                         "result": False,
@@ -324,7 +248,7 @@ class AnalyzerService:
                 cache_hit=False,
             )
 
-            return response_model.model_validate(
+            return PhishingDetectionResponse.model_validate(
                 {
                     "url": canonical_url,
                     "result": bool(model_result["result"]),

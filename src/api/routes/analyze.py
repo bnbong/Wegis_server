@@ -4,9 +4,8 @@
 # @author bnbong bbbong9@gmail.com
 # --------------------------------------------------------------------------
 import logging
-from typing import Optional, List
+from typing import List
 from fastapi import APIRouter, Depends, Query, Request, HTTPException
-from fastapi.responses import RedirectResponse
 
 from src.database import DBManager
 from src.core.config import settings
@@ -52,28 +51,6 @@ async def clear_perf_records():
     return {"timestamp": datetime.now().isoformat(), "message": "cleared"}
 
 
-def get_recent_phishing_urls(
-    limit: int = 100, offset: int = 0, db_manager: Optional[DBManager] = None
-) -> list:
-    """Get recent phishing URL list"""
-    logger.info(f"Fetching recent phishing URLs, limit: {limit}, offset: {offset}")
-
-    if db_manager is None:
-        db_manager = DBManager()
-
-    urls = db_manager.get_phishing_urls(limit=limit, offset=offset)
-
-    return [
-        {
-            "url": url.url,
-            "is_phishing": url.is_phishing,
-            "confidence": url.confidence,
-            "detection_time": url.detection_time.isoformat(),
-        }
-        for url in urls
-    ]
-
-
 @router.get("/recent", response_model=ResponseSchema[PhishingURLListResponse])
 def get_recent_phishing(
     limit: int = Query(100, ge=1, le=1000),
@@ -83,7 +60,16 @@ def get_recent_phishing(
     """
     Recent URL detection request list endpoint
     """
-    urls = get_recent_phishing_urls(db_manager=db_manager, limit=limit, offset=offset)
+    logger.info(f"Fetching recent phishing URLs, limit: {limit}, offset: {offset}")
+    urls = [
+        {
+            "url": url.url,
+            "is_phishing": url.is_phishing,
+            "confidence": url.confidence,
+            "detection_time": url.detection_time.isoformat(),
+        }
+        for url in db_manager.get_phishing_urls(limit=limit, offset=offset)
+    ]
     result = PhishingURLListResponse(
         urls=urls,
         total=len(urls),
@@ -96,14 +82,6 @@ def get_recent_phishing(
         data=result,
     )
     return response
-
-
-@router.post("")
-async def check_legacy():
-    """
-    Legacy URL phishing detection endpoint
-    """
-    return RedirectResponse(url="/analyze/check")
 
 
 @router.post("/check", response_model=ResponseSchema[PhishingDetectionResponse])

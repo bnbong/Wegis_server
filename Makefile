@@ -33,8 +33,8 @@ logs-server: ## Show logs for wegis-server only
 shell: ## Open shell in the wegis-server container
 	docker-compose exec wegis-server /bin/bash
 
-db-only: ## Start only database services (PostgreSQL, Redis, MongoDB)
-	docker-compose up -d postgres redis mongodb
+db-only: ## Start only database services (PostgreSQL, Redis)
+	docker-compose up -d postgres redis
 
 # Test Environment
 test-up: ## Start test environment
@@ -42,7 +42,6 @@ test-up: ## Start test environment
 	@echo "Test databases are ready"
 	@echo "PostgreSQL: localhost:5433"
 	@echo "Redis: localhost:6380"
-	@echo "MongoDB: localhost:27018"
 
 test-down: ## Stop test environment
 	docker-compose -f docker-compose.test.yml down

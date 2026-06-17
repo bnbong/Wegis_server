@@ -156,3 +156,6 @@ Desktop.ini
 # Repomix output
 repomix-output.txt
 repomix-output.xml
+
+# AI
+.claude

@@ -9,11 +9,7 @@ import torch
 
 
 class QbertUrlTokenizer:
-    def __init__(
-        self,
-        pretrained_path=None,
-        special_tokens=["[PAD]", "[UNK]", "[MASK]", "[CLS]", "[SEP]"],
-    ):
+    def __init__(self):
         self.idx_to_token = {}
         self.token_to_idx = {}
 
@@ -107,56 +103,11 @@ class QbertUrlTokenizer:
                     mask_item += [0] * (max_length - len(mask_item))
             token_ids.append(url_item)
             mask.append(mask_item)
-        # print(len(token_ids), len(token_ids[0]), len(mask), len(mask[0]))
-        # print(token_ids[0])
-        # print(mask[0])
-
-        # max_length processing: truncate & pad
-        # if max_length is not None:
-        #     if len(token_ids) > max_length:
-        #         token_ids = token_ids[:max_length]  # Truncate
-        #         mask = mask[:max_length]
-        #     elif len(token_ids) < max_length:
-        #         # Padding
-        #         token_ids += [self.pad_idx] * (max_length - len(token_ids))
-        #         mask += [0] * (max_length - len(token_ids))
-
-        # Masking processing
-        # Masking targets: PAD, MASK, UNK, excluding special tokens
-        # Here, PAD, MASK, UNK, and special tokens are not masked
-        # Get special token indices
-        # special_token_ids = {self.token_to_idx[tok] for tok in self.special_tokens}
-
-        # if masking_ratio > 0 and max_length is not None:
-        #     # Number of masks
-        #     num_to_mask = int((len(token_ids) - token_ids.count(self.pad_idx)) * masking_ratio)
-
-        #     # Possible indices for masking (excluding special tokens and PAD tokens)
-        #     candidate_indices = [i for i, t in enumerate(token_ids) if t not in special_token_ids]
-
-        #     # Random sample
-        #     random.shuffle(candidate_indices)
-        #     mask_indices = candidate_indices[:num_to_mask]
-
-        #     # Replace with [MASK] token
-        #     for i in mask_indices:
-        #         token_ids[i] = self.mask_idx
 
         return {
             "input_ids": torch.tensor(token_ids),
             "attention_mask": torch.tensor(mask),
         }
-
-    def decode(self, token_ids):
-        # Restore indices to characters
-        return "".join(
-            [
-                self.idx_to_token[idx]
-                for idx in token_ids
-                if idx < len(self.idx_to_token)
-                and self.idx_to_token[idx] not in self.special_tokens
-            ]
-        )
 
     def __len__(self):
         return len(self.idx_to_token)

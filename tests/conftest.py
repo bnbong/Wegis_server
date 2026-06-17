@@ -56,7 +56,12 @@ def mock_request():
     """
     request = MagicMock(spec=Request)
     request.app.state.model = MagicMock()
-    request.app.state.model.predict.return_value = {"result": True, "confidence": 0.85}
+    request.app.state.model.predict_from_html.return_value = {
+        "result": True,
+        "confidence": 0.85,
+        "preprocess_ms": 0.0,
+        "infer_ms": 0.0,
+    }
     return request
 
 
@@ -72,7 +77,6 @@ def mock_db_manager():
     db_manager.get_cached_result = AsyncMock(return_value=None)
     db_manager.save_phishing_url = MagicMock(return_value=MagicMock())
     db_manager.cache_result = AsyncMock(return_value=None)
-    db_manager.cache_phishing_result = AsyncMock(return_value=None)
     db_manager.get_phishing_urls = MagicMock(return_value=[])
     return db_manager
 

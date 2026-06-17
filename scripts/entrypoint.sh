@@ -23,13 +23,6 @@ while ! nc -z ${REDIS_HOST:-redis} ${REDIS_PORT:-6379}; do
 done
 echo "Redis is ready!"
 
-# Wait for MongoDB to be ready
-echo "Waiting for MongoDB..."
-while ! nc -z ${MONGODB_HOST:-mongodb} ${MONGODB_PORT:-27017}; do
-  sleep 0.1
-done
-echo "MongoDB is ready!"
-
 # Run database migrations
 echo "Running database migrations..."
 alembic upgrade head

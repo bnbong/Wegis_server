@@ -1,14 +1,15 @@
+<p align="center">
+    <img align="top" width="50%" src=".github/assets/wegis_logo_general.png" alt="Wegis"/>
+</p>
+<p align="center">
+<em><b>Wegis Server:</b> CNN + BERT multimodal Phishing Detection Server</em>
+</p>
 <div align="center">
-
-# Wegis Server
-
-**CNN + BERT multimodal Phishing Detection Server**
 
 [![Python](https://img.shields.io/badge/Python-3.12-blue)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.116.2-blue)](https://fastapi.tiangolo.com/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-blue)](https://www.postgresql.org/)
 [![Redis](https://img.shields.io/badge/Redis-7-blue)](https://redis.io/)
-[![MongoDB](https://img.shields.io/badge/MongoDB-7-blue)](https://www.mongodb.com/)
 
 </div>
 
@@ -33,7 +34,6 @@ _[Wegis](https://github.com/bnbong/Wegis) - A Chrome browser extension's server 
 ### Other API
 
 - `GET /health` - Server status check
-- `POST /feedback/*` - User feedback management
 
 more details in live server's [API documentation](http://localhost:8000/docs)
 
@@ -63,30 +63,18 @@ make up
 
 ### Local Development Commands
 
-```bash
-# Manage all services
-make up          # Start all services
-make down        # Stop all services
-make logs        # Check logs
-make health      # Check service status
-
-# Development only
-make db-only     # Start only database services
-make shell       # Server container access
-make logs-server # Server log only
-
-# Test environment
-make test-up     # Start test database
-make test        # Run all tests
-make test-down   # Stop test database
-
-# Database management
-make migrate     # Run migrations
-make reset       # Delete all data (WARNING: This will delete all data!)
-
-# Testing
-make test        # Run all tests
-make test-up     # Start test database
-make test-down   # Stop test database
-make test-logs   # Show test environment logs
-```
+| Command | Description |
+| --- | --- |
+| `make up` | Start all services |
+| `make down` | Stop all services |
+| `make logs` | Tail all service logs |
+| `make health` | Check service status |
+| `make db-only` | Start only database services (PostgreSQL, Redis) |
+| `make shell` | Open a shell in the server container |
+| `make logs-server` | Tail server logs only |
+| `make migrate` | Run database migrations |
+| `make reset` | Delete all data (WARNING: destroys all data) |
+| `make test-up` | Start the test database |
+| `make test` | Run all tests |
+| `make test-down` | Stop the test database |
+| `make test-logs` | Show test environment logs |
