@@ -4,7 +4,11 @@
 import re
 
 from src.services.fetchers.browser_fetcher import BrowserFetcher
-from src.services.fetchers.http_fetcher import FetchResult, HTTPFetcher
+from src.services.fetchers.http_fetcher import (
+    FetchResult,
+    HTTPFetcher,
+    is_html_content_type,
+)
 
 
 class HybridFetcher:
@@ -33,8 +37,12 @@ class HybridFetcher:
 
     def fetch(self, url: str) -> FetchResult | None:
         http_result = self.http_fetcher.fetch(url)
-        if http_result and not self._is_low_quality_html(http_result.html):
-            return http_result
+        if http_result is not None:
+            # Non-HTML resources must never be escalated to the browser.
+            if not is_html_content_type(http_result.content_type):
+                return http_result
+            if not self._is_low_quality_html(http_result.html):
+                return http_result
 
         browser_result = self.browser_fetcher.fetch(url)
         if browser_result:

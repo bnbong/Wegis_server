@@ -52,7 +52,11 @@ class DBManager:
 
     def _cache_key(self, url: str) -> str:
         canonical = canonicalize_url(url)
-        return f"{settings.REDIS_NAMESPACE}:phishing:{canonical}"
+        # NOTE: prefix changed from "<ns>:phishing:" to "<ns>:analysis:" so that
+        # benign results are no longer indistinguishable from phishing ones. Legacy
+        # "<ns>:phishing:*" keys expire naturally or are removed by
+        # scripts/cleanup-redis-falsepos.sh.
+        return f"{settings.REDIS_NAMESPACE}:analysis:{canonical}"
 
     # Redis operations
     async def cache_result(

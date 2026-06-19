@@ -53,34 +53,27 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    # NOTE: iterate with a glob-disabled (set -f) loop over space-separated lists
+    # instead of backslash line-continuations. The old `SADD ... \` continuation
+    # form could leak a literal "\" member into wegis:whitelist:domains.
     command: |
       sh -c '
-        echo "Initializing Redis with default domain lists..."
+        set -euf
+        REDIS_DB_INDEX="${REDIS_DB:-0}"
+        WHITELIST_DOMAINS="google.com amazon.com microsoft.com apple.com facebook.com instagram.com twitter.com linkedin.com github.com githubusercontent.com stackoverflow.com wikipedia.org youtube.com netflix.com cnn.com bbc.com nytimes.com reddit.com openai.com naver.com daum.net kakao.com samsung.com lg.com"
+        WHITELIST_PATTERNS="*.google.com *.amazon.com *.microsoft.com *.apple.com *.github.com *.githubusercontent.com *.stackoverflow.com *.wikipedia.org *.youtube.com *.naver.com *.kakao.com"
 
-        echo "Adding whitelist domains..."
-        redis-cli -h redis -p 6379 -n ${REDIS_DB:-0} SADD "wegis:whitelist:domains" \
-          "google.com" "amazon.com" "microsoft.com" "apple.com" \
-          "facebook.com" "instagram.com" "twitter.com" "linkedin.com" \
-          "github.com" "stackoverflow.com" "wikipedia.org" "youtube.com" \
-          "netflix.com" "cnn.com" "bbc.com" "nytimes.com" "reddit.com" \
-          "openai.com" "naver.com" "daum.net" "kakao.com" "samsung.com" "lg.com"
-
-        echo "Adding whitelist patterns..."
-        redis-cli -h redis -p 6379 -n ${REDIS_DB:-0} SADD "wegis:whitelist:patterns" \
-          "*.google.com" "*.amazon.com" "*.microsoft.com" "*.apple.com" \
-          "*.github.com" "*.stackoverflow.com" "*.wikipedia.org" \
-          "*.youtube.com" "*.naver.com" "*.kakao.com"
-
-        echo "Initializing empty blacklist keys..."
-        redis-cli -h redis -p 6379 -n ${REDIS_DB:-0} SADD "wegis:blacklist:domains" "__placeholder__"
-        redis-cli -h redis -p 6379 -n ${REDIS_DB:-0} SREM "wegis:blacklist:domains" "__placeholder__"
-        redis-cli -h redis -p 6379 -n ${REDIS_DB:-0} SADD "wegis:blacklist:patterns" "__placeholder__"
-        redis-cli -h redis -p 6379 -n ${REDIS_DB:-0} SREM "wegis:blacklist:patterns" "__placeholder__"
+        echo "Initializing Redis whitelist (DB $REDIS_DB_INDEX)..."
+        for d in $WHITELIST_DOMAINS; do
+          redis-cli -h redis -p 6379 -n "$REDIS_DB_INDEX" SADD "wegis:whitelist:domains" "$d" >/dev/null
+        done
+        for p in $WHITELIST_PATTERNS; do
+          redis-cli -h redis -p 6379 -n "$REDIS_DB_INDEX" SADD "wegis:whitelist:patterns" "$p" >/dev/null
+        done
 
         echo "Redis initialization completed!"
-        echo "Whitelist domains count: $(redis-cli -h redis -p 6379 -n ${REDIS_DB:-0} SCARD wegis:whitelist:domains)"
-        echo "Whitelist patterns count: $(redis-cli -h redis -p 6379 -n ${REDIS_DB:-0} SCARD wegis:whitelist:patterns)"
-        echo "Blacklist keys initialized (empty)"
+        echo "Whitelist domains count: $(redis-cli -h redis -p 6379 -n "$REDIS_DB_INDEX" SCARD wegis:whitelist:domains)"
+        echo "Whitelist patterns count: $(redis-cli -h redis -p 6379 -n "$REDIS_DB_INDEX" SCARD wegis:whitelist:patterns)"
       '
     restart: "no"
 

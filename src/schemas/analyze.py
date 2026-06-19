@@ -21,6 +21,9 @@ class PhishingDetectionResponse(BaseModel):
     confidence: float
     source: str
     fetch_mode: str | None = None
+    # Optional provider metadata, e.g. reputation threat types. Backward
+    # compatible: defaults to None and is ignored by the (thin) extension client.
+    reason_codes: List[str] | None = None
 
 
 class PhishingURLListResponse(BaseModel):

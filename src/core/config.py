@@ -82,6 +82,9 @@ class Settings(BaseSettings):
 
     HTML_LOAD_TIMEOUT: int = 20
     HTML_LOAD_RETRIES: int = 2
+    # Max bytes read from an HTTP response body when fetching HTML. Non-HTML
+    # responses are not read at all (connection closed after headers).
+    HTTP_FETCH_MAX_BYTES: int = 3_000_000
 
     CHROMEDRIVER_PATH: str = "/usr/bin/chromedriver"
 
@@ -119,6 +122,23 @@ class Settings(BaseSettings):
 
     MAX_BROWSER_CONCURRENCY: int = 2
     MAX_INFER_CONCURRENCY: int = 4
+
+    # URL reputation (threat intelligence) stage.
+    # Each provider is auto-disabled when its API key is empty.
+    REPUTATION_ENABLED: bool = True
+    REPUTATION_TIMEOUT: float = 4.0
+    REPUTATION_MAX_CONCURRENCY: int = 8
+    REPUTATION_CACHE_TTL_MALICIOUS: int = 21600  # 6h
+    REPUTATION_CACHE_TTL_CLEAN: int = 1800  # 30m
+    GOOGLE_SAFE_BROWSING_API_KEY: str = ""
+    URLHAUS_AUTH_KEY: str = ""
+
+    # External malware scanner (VirusTotal) — only queried for high-risk download
+    # URLs (Phase 2). Lookup-first to conserve quota; set SUBMIT_UNKNOWN to seed a
+    # scan when VT has no existing report (costs extra quota).
+    VIRUSTOTAL_API_KEY: str = ""
+    VIRUSTOTAL_MALICIOUS_THRESHOLD: int = 2
+    VIRUSTOTAL_SUBMIT_UNKNOWN: bool = False
 
     BENCHMARK_OUTPUT_DIR: str = "./log/benchmarks"
     ENABLE_PERF_RECORDS: bool | None = None

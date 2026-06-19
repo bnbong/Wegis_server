@@ -35,8 +35,6 @@ _[Wegis](https://github.com/bnbong/Wegis) - A Chrome browser extension's server 
 
 - `GET /health` - Server status check
 
-more details in live server's [API documentation](http://localhost:8000/docs)
-
 ## AI Model structure
 
 ![AI Model structure](images/model_info.png)
@@ -78,3 +76,24 @@ make up
 | `make test` | Run all tests |
 | `make test-down` | Stop the test database |
 | `make test-logs` | Show test environment logs |
+
+## Operations
+
+### Analysis pipeline
+
+- Order: `whitelist → blacklist → URL reputation → analysis cache → HTML model`.
+- Non-HTML resources are not sent to the HTML model. They return `result=false`, `source="non_html"`, and are not cached.
+- Reputation hits return `result=true`, `source="reputation:<provider>"`.
+
+### Caching
+
+- Analysis results: `wegis:analysis:*`.
+- Reputation verdicts: `wegis:reputation:*`; unknown results are not cached.
+- Legacy `wegis:phishing:*` keys expire naturally. Signed URLs are canonicalized with recognized signing params removed.
+
+### Reputation providers
+
+- Providers are server-side only and disabled unless their API key is set.
+- Supported keys: `GOOGLE_SAFE_BROWSING_API_KEY`, `URLHAUS_AUTH_KEY`, and optional `VIRUSTOTAL_API_KEY`.
+- Provider errors/timeouts fail open, and concurrent lookups are bounded/coalesced to protect quota.
+- VirusTotal only checks high-risk download URLs and delegates scanning by URL; the server does not download files.

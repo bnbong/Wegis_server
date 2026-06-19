@@ -18,4 +18,5 @@ class BrowserFetcher:
             fetch_mode="browser",
             status_code=None,
             final_url=None,
+            content_type="text/html",
         )

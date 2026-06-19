@@ -16,7 +16,9 @@ from src.schemas.analyze import PhishingDetectionResponse
 from src.clients.redis import get_redis
 from src.core.config import settings
 from src.services.fetchers.hybrid_fetcher import HybridFetcher
+from src.services.fetchers.http_fetcher import is_html_content_type
 from src.services.performance import StageTimer, build_perf_record, log_perf_record
+from src.services.reputation import ReputationService
 from src.services.url_utils import canonicalize_url
 
 logger = logging.getLogger("main")
@@ -28,11 +30,42 @@ class AnalyzerService:
 
     def __init__(self):
         self.fetcher = HybridFetcher()
+        self.reputation_service = ReputationService()
         self.browser_semaphore = asyncio.Semaphore(settings.MAX_BROWSER_CONCURRENCY)
         self.infer_semaphore = asyncio.Semaphore(settings.MAX_INFER_CONCURRENCY)
 
     def close(self) -> None:
         self.fetcher.close()
+
+    async def _check_reputation(
+        self, input_url: str, canonical_url: str
+    ) -> Optional[PhishingDetectionResponse]:
+        """Run the URL reputation stage.
+
+        Returns a phishing response when a provider flags the URL as malicious,
+        otherwise None (clean/unknown/disabled) so analysis continues. Fail-open:
+        any error degrades to None rather than blocking the pipeline.
+        """
+        try:
+            result = await self.reputation_service.check(input_url)
+        except Exception as exc:
+            logger.warning(f"Reputation stage failed for {canonical_url}: {exc}")
+            return None
+
+        if result is None or not result.is_malicious:
+            return None
+
+        logger.info(f"URL {canonical_url} flagged malicious by {result.source}")
+        return PhishingDetectionResponse.model_validate(
+            {
+                "url": canonical_url,
+                "result": True,
+                "confidence": result.confidence,
+                "source": result.source,
+                "fetch_mode": "none",
+                "reason_codes": result.reason_codes or None,
+            }
+        )
 
     async def _cleanup_inflight_task(
         self,
@@ -66,10 +99,14 @@ class AnalyzerService:
 
         return await asyncio.shield(existing)
 
-    async def _fetch_html_once(self, url: str) -> tuple[str | None, str]:
+    async def _fetch_html_once(self, url: str) -> tuple[str | None, str, str | None]:
         http_result = await asyncio.to_thread(self.fetcher.http_fetcher.fetch, url)
-        if http_result and not self.fetcher._is_low_quality_html(http_result.html):
-            return http_result.html, "http"
+        if http_result is not None:
+            # Non-HTML resources must never be escalated to the browser.
+            if not is_html_content_type(http_result.content_type):
+                return http_result.html, "http", http_result.content_type
+            if not self.fetcher._is_low_quality_html(http_result.html):
+                return http_result.html, "http", http_result.content_type
 
         async with self.browser_semaphore:
             browser_result = await asyncio.to_thread(
@@ -77,12 +114,12 @@ class AnalyzerService:
                 url,
             )
         if browser_result:
-            return browser_result.html, "browser"
+            return browser_result.html, "browser", browser_result.content_type
 
         if http_result:
-            return http_result.html, "http"
+            return http_result.html, "http", http_result.content_type
 
-        return None, "none"
+        return None, "none", None
 
     async def _persist_result(
         self,
@@ -168,6 +205,14 @@ class AnalyzerService:
                 }
             )
 
+        # URL reputation (threat intelligence) stage: runs before the analysis
+        # cache and the HTML model, so it also covers non-HTML/download URLs that
+        # the model would otherwise skip. Malicious -> block; clean/unknown ->
+        # continue. Fail-open on any provider error.
+        reputation_response = await self._check_reputation(input_url, canonical_url)
+        if reputation_response is not None:
+            return reputation_response
+
         if db_manager is None:
             db_manager = DBManager()
 
@@ -197,8 +242,36 @@ class AnalyzerService:
                 )
 
             timer.start("html_fetch")
-            html_content, fetch_mode = await self._fetch_html_once(input_url)
+            html_content, fetch_mode, content_type = await self._fetch_html_once(
+                input_url
+            )
             timer.stop("html_fetch")
+
+            if not is_html_content_type(content_type):
+                # Non-HTML resource (image/svg/pdf/zip/binary): not valid input for
+                # the HTML phishing model. Return benign without running the model,
+                # escalating to the browser, or caching the result.
+                logger.info(
+                    f"Skipping non-HTML resource {canonical_url} "
+                    f"(content-type={content_type})"
+                )
+                self._record_perf(
+                    url=canonical_url,
+                    source="non_html",
+                    timer=timer,
+                    fetch_mode=fetch_mode,
+                    cache_hit=False,
+                )
+                return PhishingDetectionResponse.model_validate(
+                    {
+                        "url": canonical_url,
+                        "result": False,
+                        "confidence": 0.0,
+                        "source": "non_html",
+                        "fetch_mode": fetch_mode,
+                    }
+                )
+
             if not html_content:
                 return PhishingDetectionResponse.model_validate(
                     {

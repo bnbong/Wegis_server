@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock, patch, MagicMock
 
 from src.exceptions import BackendExceptions
 from src.schemas.analyze import PhishingDetectionResponse
+from src.services.fetchers.http_fetcher import FetchResult
+from src.services.reputation import ReputationResult
 
 
 class TestAnalyzerService:
@@ -123,7 +125,9 @@ class TestAnalyzerService:
             "infer_ms": 1.0,
         }
         analyzer_service.fetcher.http_fetcher.fetch = MagicMock(
-            return_value=MagicMock(html="<html>ok</html>")
+            return_value=FetchResult(
+                html="<html>ok</html>", fetch_mode="http", content_type="text/html"
+            )
         )
         analyzer_service.fetcher._is_low_quality_html = MagicMock(return_value=False)
         analyzer_service.fetcher.browser_fetcher.fetch = MagicMock()
@@ -186,7 +190,9 @@ class TestAnalyzerService:
             "infer_ms": 1.0,
         }
         analyzer_service.fetcher.http_fetcher.fetch = MagicMock(
-            return_value=MagicMock(html="<html>ok</html>")
+            return_value=FetchResult(
+                html="<html>ok</html>", fetch_mode="http", content_type="text/html"
+            )
         )
         analyzer_service.fetcher._is_low_quality_html = MagicMock(return_value=False)
         analyzer_service.fetcher.browser_fetcher.fetch = MagicMock()
@@ -238,7 +244,9 @@ class TestAnalyzerService:
             "confidence": None,
         }
         analyzer_service.fetcher.http_fetcher.fetch = MagicMock(
-            return_value=MagicMock(html="<html>ok</html>")
+            return_value=FetchResult(
+                html="<html>ok</html>", fetch_mode="http", content_type="text/html"
+            )
         )
         analyzer_service.fetcher._is_low_quality_html = MagicMock(return_value=False)
         analyzer_service.fetcher.browser_fetcher.fetch = MagicMock()
@@ -269,6 +277,215 @@ class TestAnalyzerService:
             assert result.source == "error"
 
     @pytest.mark.asyncio
+    async def test_reputation_malicious_blocks_download_url(
+        self, analyzer_service, mock_request, mock_db_manager
+    ):
+        """A reputation-flagged URL is blocked before fetch/model, even for downloads."""
+        analyzer_service.reputation_service.check = AsyncMock(
+            return_value=ReputationResult(
+                verdict="malicious",
+                confidence=0.95,
+                source="reputation:gsb",
+                provider="gsb",
+                reason_codes=["MALWARE"],
+            )
+        )
+        analyzer_service.fetcher.http_fetcher.fetch = MagicMock()
+        analyzer_service.fetcher.browser_fetcher.fetch = MagicMock()
+
+        with (
+            patch("src.services.analyzer.get_redis") as mock_get_redis,
+            patch("src.services.analyzer.DomainChecker") as mock_domain_checker_class,
+        ):
+            mock_get_redis.return_value = AsyncMock()
+            mock_domain_checker = AsyncMock()
+            mock_domain_checker.is_whitelisted.return_value = False
+            mock_domain_checker.is_blacklisted.return_value = False
+            mock_domain_checker_class.return_value = mock_domain_checker
+
+            result = await analyzer_service.analyze(
+                url="https://evil.example.com/installer.exe",
+                request=mock_request,
+                db_manager=mock_db_manager,
+            )
+
+        assert result.result is True
+        assert result.source == "reputation:gsb"
+        assert result.reason_codes == ["MALWARE"]
+        # Reputation runs before the analysis cache, fetch and model.
+        mock_db_manager.get_cached_result.assert_not_called()
+        analyzer_service.fetcher.http_fetcher.fetch.assert_not_called()
+        analyzer_service.fetcher.browser_fetcher.fetch.assert_not_called()
+        mock_request.app.state.model.predict_from_html.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reputation_failure_is_fail_open(
+        self, analyzer_service, mock_request, mock_db_manager
+    ):
+        """If the reputation stage errors, analysis continues to the model."""
+        analyzer_service.reputation_service.check = AsyncMock(
+            side_effect=RuntimeError("provider down")
+        )
+        mock_request.app.state.model.predict_from_html.return_value = {
+            "result": True,
+            "confidence": 0.85,
+            "preprocess_ms": 1.0,
+            "infer_ms": 1.0,
+        }
+        analyzer_service.fetcher.http_fetcher.fetch = MagicMock(
+            return_value=FetchResult(
+                html="<html>ok</html>", fetch_mode="http", content_type="text/html"
+            )
+        )
+        analyzer_service.fetcher._is_low_quality_html = MagicMock(return_value=False)
+        analyzer_service.fetcher.browser_fetcher.fetch = MagicMock()
+
+        with (
+            patch("src.services.analyzer.get_redis") as mock_get_redis,
+            patch("src.services.analyzer.DomainChecker") as mock_domain_checker_class,
+        ):
+            mock_get_redis.return_value = AsyncMock()
+            mock_domain_checker = AsyncMock()
+            mock_domain_checker.is_whitelisted.return_value = False
+            mock_domain_checker.is_blacklisted.return_value = False
+            mock_domain_checker_class.return_value = mock_domain_checker
+
+            result = await analyzer_service.analyze(
+                url="https://unknown-site.com",
+                request=mock_request,
+                db_manager=mock_db_manager,
+            )
+
+        assert result.source == "model"
+        assert result.result is True
+
+    @pytest.mark.asyncio
+    async def test_reputation_clean_continues_to_model(
+        self, analyzer_service, mock_request, mock_db_manager
+    ):
+        """A clean reputation verdict does not short-circuit; the model still runs."""
+        analyzer_service.reputation_service.check = AsyncMock(
+            return_value=ReputationResult(
+                verdict="clean",
+                confidence=0.0,
+                source="reputation",
+                provider="reputation",
+            )
+        )
+        mock_request.app.state.model.predict_from_html.return_value = {
+            "result": False,
+            "confidence": 0.2,
+            "preprocess_ms": 1.0,
+            "infer_ms": 1.0,
+        }
+        analyzer_service.fetcher.http_fetcher.fetch = MagicMock(
+            return_value=FetchResult(
+                html="<html>ok</html>", fetch_mode="http", content_type="text/html"
+            )
+        )
+        analyzer_service.fetcher._is_low_quality_html = MagicMock(return_value=False)
+        analyzer_service.fetcher.browser_fetcher.fetch = MagicMock()
+
+        with (
+            patch("src.services.analyzer.get_redis") as mock_get_redis,
+            patch("src.services.analyzer.DomainChecker") as mock_domain_checker_class,
+        ):
+            mock_get_redis.return_value = AsyncMock()
+            mock_domain_checker = AsyncMock()
+            mock_domain_checker.is_whitelisted.return_value = False
+            mock_domain_checker.is_blacklisted.return_value = False
+            mock_domain_checker_class.return_value = mock_domain_checker
+
+            result = await analyzer_service.analyze(
+                url="https://unknown-site.com",
+                request=mock_request,
+                db_manager=mock_db_manager,
+            )
+
+        assert result.source == "model"
+        mock_request.app.state.model.predict_from_html.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_blacklist_takes_precedence_over_non_html(
+        self, analyzer_service, mock_request, mock_db_manager
+    ):
+        """Blacklisted domains stay phishing even for non-HTML download URLs.
+
+        The non-HTML skip guards model input quality; it must not disable domain
+        reputation. Blacklist is checked before any fetch, so the resource is
+        never fetched.
+        """
+        analyzer_service.fetcher.http_fetcher.fetch = MagicMock()
+        analyzer_service.fetcher.browser_fetcher.fetch = MagicMock()
+
+        with (
+            patch("src.services.analyzer.get_redis") as mock_get_redis,
+            patch("src.services.analyzer.DomainChecker") as mock_domain_checker_class,
+        ):
+            mock_redis = AsyncMock()
+            mock_get_redis.return_value = mock_redis
+
+            mock_domain_checker = AsyncMock()
+            mock_domain_checker.is_whitelisted.return_value = False
+            mock_domain_checker.is_blacklisted.return_value = True
+            mock_domain_checker_class.return_value = mock_domain_checker
+
+            result = await analyzer_service.analyze(
+                url="https://malicious-host.com/payload.pdf",
+                request=mock_request,
+                db_manager=mock_db_manager,
+            )
+
+        assert result.result is True
+        assert result.source == "blacklist"
+        # Blacklist short-circuits before fetch; non-HTML skip never runs.
+        analyzer_service.fetcher.http_fetcher.fetch.assert_not_called()
+        analyzer_service.fetcher.browser_fetcher.fetch.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_analyze_skips_non_html_resource(
+        self, analyzer_service, mock_request, mock_db_manager
+    ):
+        """Non-HTML resources (SVG/PDF/...) must not run the model or browser fallback."""
+        # http fetch returns a non-HTML resource (e.g. GitHub camo SVG badge)
+        analyzer_service.fetcher.http_fetcher.fetch = MagicMock(
+            return_value=FetchResult(
+                html="", fetch_mode="http", content_type="image/svg+xml"
+            )
+        )
+        analyzer_service.fetcher.browser_fetcher.fetch = MagicMock()
+
+        with (
+            patch("src.services.analyzer.get_redis") as mock_get_redis,
+            patch("src.services.analyzer.DomainChecker") as mock_domain_checker_class,
+            patch("src.services.analyzer.log_perf_record"),
+        ):
+            mock_redis = AsyncMock()
+            mock_get_redis.return_value = mock_redis
+
+            mock_domain_checker = AsyncMock()
+            mock_domain_checker.is_whitelisted.return_value = False
+            mock_domain_checker.is_blacklisted.return_value = False
+            mock_domain_checker_class.return_value = mock_domain_checker
+
+            result = await analyzer_service.analyze(
+                url="https://camo.githubusercontent.com/abc/badge.svg",
+                request=mock_request,
+                db_manager=mock_db_manager,
+            )
+
+        assert isinstance(result, PhishingDetectionResponse)
+        assert result.result is False
+        assert result.confidence == 0.0
+        assert result.source == "non_html"
+
+        # No browser escalation, no model inference, no persistence/cache.
+        analyzer_service.fetcher.browser_fetcher.fetch.assert_not_called()
+        mock_request.app.state.model.predict_from_html.assert_not_called()
+        mock_db_manager.save_phishing_url.assert_not_called()
+        mock_db_manager.cache_result.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_analyze_predict_from_html_path(
         self, analyzer_service, mock_request, mock_db_manager
     ):
@@ -292,7 +509,9 @@ class TestAnalyzerService:
         mock_request.app.state.model = detector
 
         analyzer_service.fetcher.http_fetcher.fetch = MagicMock(
-            return_value=MagicMock(html="<html>ok</html>")
+            return_value=FetchResult(
+                html="<html>ok</html>", fetch_mode="http", content_type="text/html"
+            )
         )
         analyzer_service.fetcher._is_low_quality_html = MagicMock(return_value=False)
         analyzer_service.fetcher.browser_fetcher.fetch = MagicMock()
