@@ -206,6 +206,26 @@ class TestDatabaseIntegration:
         assert test_url in url_strings
 
     @pytest.mark.asyncio
+    async def test_get_phishing_urls_excludes_benign(self, db_manager):
+        """get_phishing_urls() returns only phishing rows unless include_benign."""
+        phishing_url = "https://recent-phishing-filter.com"
+        benign_url = "https://recent-benign-filter.com"
+        db_manager.save_phishing_url(
+            url=phishing_url, is_phishing=True, confidence=0.95
+        )
+        db_manager.save_phishing_url(url=benign_url, is_phishing=False, confidence=0.1)
+
+        default_urls = {u.url for u in db_manager.get_phishing_urls(limit=1000)}
+        assert phishing_url in default_urls
+        assert benign_url not in default_urls  # benign excluded by default
+
+        all_urls = {
+            u.url for u in db_manager.get_phishing_urls(limit=1000, include_benign=True)
+        }
+        assert phishing_url in all_urls
+        assert benign_url in all_urls
+
+    @pytest.mark.asyncio
     async def test_redis_cache_workflow(self, db_manager):
         """Redis cache save and retrieve test"""
         # Test data

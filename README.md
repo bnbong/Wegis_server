@@ -81,7 +81,8 @@ make up
 
 ### Analysis pipeline
 
-- Order: `whitelist → blacklist → URL reputation → analysis cache → HTML model`.
+- Order: `blacklist → URL reputation → whitelist → analysis cache → HTML model`.
+- Authoritative block signals (operator blacklist, external reputation) are checked **before** the whitelist, so a malicious URL on an otherwise-trusted, registrable-level whitelisted domain (e.g. a phishing page on `sites.google.com` under `google.com`) is still blocked rather than bypassing reputation.
 - Non-HTML resources are not sent to the HTML model. They return `result=false`, `source="non_html"`, and are not cached.
 - Reputation hits return `result=true`, `source="reputation:<provider>"`.
 
@@ -98,11 +99,12 @@ make up
 - SSRF guard allows only public http(s) targets on ports 80/443 and re-validates redirects.
 - `/analyze/*` supports Redis rate limits and optional `X-Wegis-Token` auth via `WEGIS_API_TOKENS`.
 
-### Caching
+### Caching & persistence
 
 - Analysis results: `wegis:analysis:*`.
 - Reputation verdicts: `wegis:reputation:*`; unknown results are not cached.
 - Legacy `wegis:phishing:*` keys expire naturally. Signed URLs are canonicalized with recognized signing params removed.
+- PostgreSQL (`phishing_urls`) stores **phishing** verdicts only by default; benign verdicts are cached in Redis but not persisted (avoids write amplification / unbounded growth). Set `PERSIST_BENIGN=true` to keep full history.
 
 ### Reputation providers
 

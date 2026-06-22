@@ -187,22 +187,31 @@ class AnalyzerService:
         self,
         db_manager: DBManager,
         url: str,
-        result: bool,
+        is_phishing: bool,
         confidence: float,
         html_content: str | None,
         timer: StageTimer,
     ) -> None:
+        # ``is_phishing`` is the operational BLOCK decision (severity == "block"),
+        # not the raw model positive (prob >= 0.5). So a low-confidence positive
+        # that the policy does not block is NOT recorded as phishing.
         timer.start("db_write")
-        await asyncio.to_thread(
-            db_manager.save_phishing_url,
-            url,
-            result,
-            confidence,
-            html_content,
-        )
+        # Durable PostgreSQL history: persist block-worthy verdicts; non-block
+        # (benign/warn) only when explicitly enabled (avoids write amplification +
+        # unbounded growth, since most analyzed URLs are not blocked).
+        if is_phishing or settings.PERSIST_BENIGN:
+            await asyncio.to_thread(
+                db_manager.save_phishing_url,
+                url,
+                is_phishing,
+                confidence,
+                html_content,
+            )
+        # Redis cache: every verdict, for the fast repeat path (severity is
+        # recomputed from confidence on read).
         await db_manager.cache_result(
             url=url,
-            is_phishing=result,
+            is_phishing=is_phishing,
             confidence=confidence,
         )
         timer.stop("db_write")
@@ -244,16 +253,16 @@ class AnalyzerService:
         redis_client = await get_redis()
         domain_checker = DomainChecker(redis_client)
 
-        if await domain_checker.is_whitelisted(input_url):
-            logger.info(f"URL {canonical_url} is in whitelist")
-            return self._build_response(
-                url=canonical_url,
-                source="whitelist",
-                confidence=0.01,
-                fetch_mode="none",
-                severity="allow",
-            )
+        # Authoritative BLOCK signals are checked BEFORE the whitelist so that a
+        # known-bad URL on an otherwise-trusted, coarse (registrable-level)
+        # whitelisted domain — e.g. a phishing page on sites.google.com under the
+        # whitelisted google.com — is still blocked instead of bypassing
+        # reputation entirely.
+        #
+        # Order: blacklist (operator) -> reputation (external TI) -> whitelist
+        #        (trusted, skip model) -> analysis cache -> HTML model.
 
+        # 1. Operator blacklist (local, authoritative deny).
         if await domain_checker.is_blacklisted(input_url):
             logger.info(f"URL {canonical_url} is in blacklist")
             return self._build_response(
@@ -264,13 +273,23 @@ class AnalyzerService:
                 severity="block",
             )
 
-        # URL reputation (threat intelligence) stage: runs before the analysis
-        # cache and the HTML model, so it also covers non-HTML/download URLs that
-        # the model would otherwise skip. Malicious -> block; clean/unknown ->
-        # continue. Fail-open on any provider error.
+        # 2. URL reputation (external TI). Malicious overrides the whitelist; it
+        #    also covers non-HTML/download URLs the model would skip. Fail-open.
         reputation_response = await self._check_reputation(input_url, canonical_url)
         if reputation_response is not None:
             return reputation_response
+
+        # 3. Whitelist (trusted -> allow, skip the model). Reached only when the
+        #    URL is neither blacklisted nor flagged malicious.
+        if await domain_checker.is_whitelisted(input_url):
+            logger.info(f"URL {canonical_url} is in whitelist")
+            return self._build_response(
+                url=canonical_url,
+                source="whitelist",
+                confidence=0.01,
+                fetch_mode="none",
+                severity="allow",
+            )
 
         if db_manager is None:
             db_manager = DBManager()
@@ -392,13 +411,14 @@ class AnalyzerService:
         timer.stages["inference"] = model_result.get("infer_ms", 0.0)
 
         confidence = float(model_result["confidence"])
+        severity = self._model_severity(confidence, context)
 
-        # Persist the RAW model verdict (is_phishing = prob >= 0.5). Storage is
-        # decoupled from the severity policy; severity is computed at response time.
+        # Persist the operational BLOCK decision (not the raw prob>=0.5 positive),
+        # so a low-confidence, non-blocked positive is not logged as phishing.
         await self._persist_result(
             db_manager=db_manager,
             url=canonical_url,
-            result=bool(model_result["result"]),
+            is_phishing=(severity == "block"),
             confidence=confidence,
             html_content=html_content,
             timer=timer,
@@ -417,7 +437,7 @@ class AnalyzerService:
             source="model",
             confidence=confidence,
             fetch_mode=fetch_mode,
-            severity=self._model_severity(confidence, context),
+            severity=severity,
         )
 
     def _maybe_schedule_background(

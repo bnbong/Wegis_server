@@ -43,9 +43,10 @@ class TestAnalyzerService:
             mock_redis = AsyncMock()
             mock_get_redis.return_value = mock_redis
 
-            # DomainChecker mocking
+            # DomainChecker mocking (blacklist checked before whitelist now)
             mock_domain_checker = AsyncMock()
             mock_domain_checker.is_whitelisted.return_value = True
+            mock_domain_checker.is_blacklisted.return_value = False
             mock_domain_checker_class.return_value = mock_domain_checker
 
             result = await analyzer_service.analyze(
@@ -58,6 +59,45 @@ class TestAnalyzerService:
             assert result.result is False
             assert result.confidence == 0.01
             assert result.source == "whitelist"
+
+    @pytest.mark.asyncio
+    async def test_reputation_overrides_whitelist(
+        self, analyzer_service, mock_request, mock_db_manager
+    ):
+        """A malicious reputation verdict blocks even a whitelisted domain.
+
+        e.g. a phishing page on sites.google.com under the whitelisted google.com.
+        """
+        analyzer_service.reputation_service.check = AsyncMock(
+            return_value=ReputationResult(
+                verdict="malicious",
+                confidence=0.95,
+                source="reputation:gsb",
+                provider="gsb",
+                reason_codes=["SOCIAL_ENGINEERING"],
+            )
+        )
+
+        with (
+            patch("src.services.analyzer.get_redis") as mock_get_redis,
+            patch("src.services.analyzer.DomainChecker") as mock_domain_checker_class,
+        ):
+            mock_get_redis.return_value = AsyncMock()
+            mock_domain_checker = AsyncMock()
+            mock_domain_checker.is_whitelisted.return_value = True  # trusted domain...
+            mock_domain_checker.is_blacklisted.return_value = False
+            mock_domain_checker_class.return_value = mock_domain_checker
+
+            result = await analyzer_service.analyze(
+                url="https://sites.google.com/view/phish",
+                request=mock_request,
+                db_manager=mock_db_manager,
+            )
+
+        # Reputation runs before whitelist, so the URL is blocked, not allowed.
+        assert result.result is True
+        assert result.source == "reputation:gsb"
+        assert result.severity == "block"
 
     @pytest.mark.asyncio
     async def test_analyze_blacklist_url(
@@ -199,9 +239,10 @@ class TestAnalyzerService:
         """Model path should keep raw input for inference and canonical URL for persistence"""
         raw_input = "www.legacy-site.com/login?b=2&a=1"
 
+        # High confidence so the verdict is a block (and thus persisted).
         mock_request.app.state.model.predict_from_html.return_value = {
             "result": True,
-            "confidence": 0.85,
+            "confidence": 0.95,
             "preprocess_ms": 1.0,
             "infer_ms": 1.0,
         }
@@ -232,21 +273,22 @@ class TestAnalyzerService:
             )
 
             assert result.url == "https://legacy-site.com/login?a=1&b=2"
-            mock_domain_checker.is_whitelisted.assert_awaited_once_with(raw_input)
             mock_domain_checker.is_blacklisted.assert_awaited_once_with(raw_input)
+            mock_domain_checker.is_whitelisted.assert_awaited_once_with(raw_input)
             mock_request.app.state.model.predict_from_html.assert_called_once_with(
                 raw_input, "<html>ok</html>"
             )
+            # is_phishing stored = block decision (True), confidence = raw prob.
             mock_db_manager.save_phishing_url.assert_called_once_with(
                 "https://legacy-site.com/login?a=1&b=2",
                 True,
-                0.85,
+                0.95,
                 "<html>ok</html>",
             )
             mock_db_manager.cache_result.assert_called_once_with(
                 url="https://legacy-site.com/login?a=1&b=2",
                 is_phishing=True,
-                confidence=0.85,
+                confidence=0.95,
             )
 
     @pytest.mark.asyncio
@@ -686,6 +728,130 @@ class TestAnalyzerService:
         assert result.result is False
         mock_request.app.state.model.predict_from_html.assert_not_called()
         analyzer_service.fetcher.http_fetcher.fetch.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_benign_model_result_not_persisted_to_postgres(
+        self, analyzer_service, mock_request, mock_db_manager
+    ):
+        """Benign verdicts are cached in Redis but not written to PostgreSQL."""
+        mock_request.app.state.model.predict_from_html.return_value = {
+            "result": False,
+            "confidence": 0.2,
+            "preprocess_ms": 1.0,
+            "infer_ms": 1.0,
+        }
+        analyzer_service.fetcher.http_fetcher.fetch = MagicMock(
+            return_value=FetchResult(
+                html="<html>ok</html>", fetch_mode="http", content_type="text/html"
+            )
+        )
+        analyzer_service.fetcher._is_low_quality_html = MagicMock(return_value=False)
+        analyzer_service.fetcher.browser_fetcher.fetch = MagicMock()
+
+        with (
+            patch.object(analyzer_mod.settings, "PERSIST_BENIGN", False),
+            patch("src.services.analyzer.get_redis") as mock_get_redis,
+            patch("src.services.analyzer.DomainChecker") as mock_domain_checker_class,
+        ):
+            mock_get_redis.return_value = AsyncMock()
+            mock_domain_checker = AsyncMock()
+            mock_domain_checker.is_whitelisted.return_value = False
+            mock_domain_checker.is_blacklisted.return_value = False
+            mock_domain_checker_class.return_value = mock_domain_checker
+
+            result = await analyzer_service.analyze(
+                url="https://unknown-benign.com/page",
+                request=mock_request,
+                db_manager=mock_db_manager,
+            )
+
+        assert result.source == "model"
+        assert result.severity == "allow"
+        # Not written to PostgreSQL, but still cached in Redis.
+        mock_db_manager.save_phishing_url.assert_not_called()
+        mock_db_manager.cache_result.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_low_confidence_positive_not_persisted(
+        self, analyzer_service, mock_request, mock_db_manager
+    ):
+        """A raw model positive below the block threshold is not logged as phishing."""
+        # 0.6 is a raw positive (>=0.5) but below the pinned block (0.90) and warn
+        # (0.70) thresholds -> severity allow -> not persisted.
+        mock_request.app.state.model.predict_from_html.return_value = {
+            "result": True,
+            "confidence": 0.6,
+            "preprocess_ms": 1.0,
+            "infer_ms": 1.0,
+        }
+        analyzer_service.fetcher.http_fetcher.fetch = MagicMock(
+            return_value=FetchResult(
+                html="<html>ok</html>", fetch_mode="http", content_type="text/html"
+            )
+        )
+        analyzer_service.fetcher._is_low_quality_html = MagicMock(return_value=False)
+        analyzer_service.fetcher.browser_fetcher.fetch = MagicMock()
+
+        with (
+            patch.object(analyzer_mod.settings, "PERSIST_BENIGN", False),
+            patch("src.services.analyzer.get_redis") as mock_get_redis,
+            patch("src.services.analyzer.DomainChecker") as mock_domain_checker_class,
+        ):
+            mock_get_redis.return_value = AsyncMock()
+            mock_domain_checker = AsyncMock()
+            mock_domain_checker.is_whitelisted.return_value = False
+            mock_domain_checker.is_blacklisted.return_value = False
+            mock_domain_checker_class.return_value = mock_domain_checker
+
+            result = await analyzer_service.analyze(
+                url="https://low-conf.com/p",
+                request=mock_request,
+                db_manager=mock_db_manager,
+            )
+
+        assert result.result is False  # not blocked
+        mock_db_manager.save_phishing_url.assert_not_called()
+        mock_db_manager.cache_result.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_persist_benign_true_saves_non_block(
+        self, analyzer_service, mock_request, mock_db_manager
+    ):
+        """PERSIST_BENIGN=true records non-block rows with is_phishing=False."""
+        mock_request.app.state.model.predict_from_html.return_value = {
+            "result": False,
+            "confidence": 0.2,
+            "preprocess_ms": 1.0,
+            "infer_ms": 1.0,
+        }
+        analyzer_service.fetcher.http_fetcher.fetch = MagicMock(
+            return_value=FetchResult(
+                html="<html>ok</html>", fetch_mode="http", content_type="text/html"
+            )
+        )
+        analyzer_service.fetcher._is_low_quality_html = MagicMock(return_value=False)
+        analyzer_service.fetcher.browser_fetcher.fetch = MagicMock()
+
+        with (
+            patch.object(analyzer_mod.settings, "PERSIST_BENIGN", True),
+            patch("src.services.analyzer.get_redis") as mock_get_redis,
+            patch("src.services.analyzer.DomainChecker") as mock_domain_checker_class,
+        ):
+            mock_get_redis.return_value = AsyncMock()
+            mock_domain_checker = AsyncMock()
+            mock_domain_checker.is_whitelisted.return_value = False
+            mock_domain_checker.is_blacklisted.return_value = False
+            mock_domain_checker_class.return_value = mock_domain_checker
+
+            await analyzer_service.analyze(
+                url="https://benign.com/p",
+                request=mock_request,
+                db_manager=mock_db_manager,
+            )
+
+        mock_db_manager.save_phishing_url.assert_called_once()
+        # Stored is_phishing reflects the block decision (False here), not raw prob.
+        assert mock_db_manager.save_phishing_url.call_args.args[1] is False
 
     @pytest.mark.asyncio
     async def test_ssrf_blocked_returns_blocked_private(

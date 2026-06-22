@@ -142,16 +142,20 @@ class DBManager:
             session.close()
 
     def get_phishing_urls(
-        self, limit: int = 100, offset: int = 0
+        self, limit: int = 100, offset: int = 0, include_benign: bool = False
     ) -> Sequence[PhishingURL]:
-        """Get phishing URL list from PostgreSQL"""
+        """Get phishing URL list from PostgreSQL.
+
+        By default returns only phishing (blocked) rows so the "recent" feed
+        cannot be diluted by benign rows (e.g. legacy data or PERSIST_BENIGN=true).
+        """
         session = self.get_postgres_session()
         try:
+            statement = select(PhishingURL)
+            if not include_benign:
+                statement = statement.where(PhishingURL.is_phishing.is_(True))
             return session.exec(
-                select(PhishingURL)
-                .order_by(desc("detection_time"))
-                .limit(limit)
-                .offset(offset)
+                statement.order_by(desc("detection_time")).limit(limit).offset(offset)
             ).all()
         finally:
             session.close()

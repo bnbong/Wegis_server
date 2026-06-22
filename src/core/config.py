@@ -145,6 +145,11 @@ class Settings(BaseSettings):
     MODEL_BLOCK_THRESHOLD: float = 0.90
     MODEL_WARN_THRESHOLD: float = 0.70
 
+    # Persist benign model verdicts to PostgreSQL. Off by default: every analyzed
+    # URL is benign-by-majority, so persisting them all causes write amplification
+    # and unbounded table growth. Benign results are still cached in Redis.
+    PERSIST_BENIGN: bool = False
+
     # --- Analysis trigger policy (design 01) ---
     # Links (page-discovered URLs) are reputation-only + cache-first by default.
     # When enabled, a cache-miss link schedules a bounded background model run.

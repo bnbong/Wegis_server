@@ -19,9 +19,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Create phishingurl table
+    # Create phishing_urls table — must match the ORM model
+    # (src/orm_models.py: PhishingURL.__tablename__ = "phishing_urls"), which is
+    # also what SQLModel.metadata.create_all() builds at app startup. The index
+    # name matches SQLModel's default (ix_<table>_<col>) so the two paths agree.
     op.create_table(
-        "phishingurl",
+        "phishing_urls",
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("url", sa.String(), nullable=False),
         sa.Column("is_phishing", sa.Boolean(), nullable=False),
@@ -31,23 +34,11 @@ def upgrade() -> None:
         sa.Column("features", sa.Text(), nullable=True),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(op.f("ix_phishingurl_id"), "phishingurl", ["id"], unique=False)
-    op.create_index(op.f("ix_phishingurl_url"), "phishingurl", ["url"], unique=True)
     op.create_index(
-        op.f("ix_phishingurl_detection_time"),
-        "phishingurl",
-        ["detection_time"],
-        unique=False,
-    )
-    op.create_index(
-        op.f("ix_phishingurl_is_phishing"), "phishingurl", ["is_phishing"], unique=False
+        op.f("ix_phishing_urls_url"), "phishing_urls", ["url"], unique=False
     )
 
 
 def downgrade() -> None:
-    # Drop phishingurl table
-    op.drop_index(op.f("ix_phishingurl_is_phishing"), table_name="phishingurl")
-    op.drop_index(op.f("ix_phishingurl_detection_time"), table_name="phishingurl")
-    op.drop_index(op.f("ix_phishingurl_url"), table_name="phishingurl")
-    op.drop_index(op.f("ix_phishingurl_id"), table_name="phishingurl")
-    op.drop_table("phishingurl")
+    op.drop_index(op.f("ix_phishing_urls_url"), table_name="phishing_urls")
+    op.drop_table("phishing_urls")
