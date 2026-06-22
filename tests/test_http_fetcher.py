@@ -3,13 +3,27 @@
 # --------------------------------------------------------------------------
 from unittest.mock import MagicMock, patch
 
+import httpx
+import pytest
+
 from src.services.fetchers.http_fetcher import HTTPFetcher
+from src.services.net_guard import SSRFBlockedError
+
+
+@pytest.fixture(autouse=True)
+def _bypass_ssrf_dns():
+    """Avoid real DNS in unit tests; SSRF resolution is covered in test_net_guard."""
+    with patch(
+        "src.services.fetchers.http_fetcher.validate_public_url", return_value=True
+    ):
+        yield
 
 
 def _stream_cm(content_type="text/html", body=b"<html>ok</html>", status=200):
     """Build a fake context manager mimicking httpx Client.stream(...)."""
     resp = MagicMock()
     resp.status_code = status
+    resp.is_redirect = False
     resp.headers = {"content-type": content_type}
     resp.url = "https://example.com"
     resp.encoding = "utf-8"
@@ -75,3 +89,34 @@ class TestHTTPFetcher:
 
         assert result is not None
         assert len(result.html) <= 100
+
+    def test_redirect_to_internal_is_blocked(self):
+        """A public URL that 3xx-redirects to an internal IP is rejected per hop."""
+        redirect_resp = MagicMock()
+        redirect_resp.is_redirect = True
+        redirect_resp.headers = {"location": "http://169.254.169.254/"}
+        redirect_resp.url = httpx.URL("http://example.com/")
+        cm = MagicMock()
+        cm.__enter__.return_value = redirect_resp
+        cm.__exit__.return_value = False
+
+        mock_client = MagicMock()
+        mock_client.stream.return_value = cm
+
+        with (
+            patch(
+                "src.services.fetchers.http_fetcher.httpx.Client",
+                return_value=mock_client,
+            ),
+            patch(
+                "src.services.fetchers.http_fetcher.settings.SSRF_GUARD_ENABLED", True
+            ),
+            # first hop (public) ok, redirect target (internal) rejected
+            patch(
+                "src.services.fetchers.http_fetcher.validate_public_url",
+                side_effect=[True, False],
+            ),
+        ):
+            fetcher = HTTPFetcher(timeout=5.0)
+            with pytest.raises(SSRFBlockedError):
+                fetcher.fetch("https://example.com/")

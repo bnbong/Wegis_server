@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import httpx
 
 from src.core.config import settings
+from src.services.net_guard import SSRFBlockedError, validate_public_url
 
 
 logger = logging.getLogger("main")
@@ -46,7 +47,8 @@ class HTTPFetcher:
         )
         self._client = httpx.Client(
             timeout=self.timeout,
-            follow_redirects=True,
+            # Redirects are followed manually so each hop can be SSRF-validated.
+            follow_redirects=False,
             headers={
                 "User-Agent": (
                     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -65,48 +67,68 @@ class HTTPFetcher:
         self._client.close()
 
     def fetch(self, url: str) -> FetchResult | None:
-        target = self._normalize_target_url(url)
+        current = self._normalize_target_url(url)
         try:
-            # Stream so headers are available before the body is downloaded.
-            with self._client.stream("GET", target) as response:
-                if response.status_code >= 400:
-                    return None
+            for _ in range(settings.FETCH_MAX_REDIRECTS + 1):
+                # SSRF guard: validate each hop before connecting (defeats
+                # public->internal redirects). Raise so the caller can report a
+                # distinct, observable source instead of a generic error.
+                if settings.SSRF_GUARD_ENABLED and not validate_public_url(current):
+                    raise SSRFBlockedError(current)
 
-                content_type = response.headers.get("content-type")
-                final_url = str(response.url)
+                # Stream so headers are available before the body is downloaded.
+                with self._client.stream("GET", current) as response:
+                    if response.is_redirect:
+                        location = response.headers.get("location")
+                        if not location:
+                            return None
+                        current = str(response.url.join(location))
+                        continue
 
-                # Non-HTML resources (image/svg/pdf/zip/binary) are NOT downloaded:
-                # we return after headers and close the connection, so the server
-                # never streams an untrusted binary into our memory/bandwidth.
-                if not is_html_content_type(content_type):
+                    if response.status_code >= 400:
+                        return None
+
+                    content_type = response.headers.get("content-type")
+                    final_url = str(response.url)
+
+                    # Non-HTML resources (image/svg/pdf/zip/binary) are NOT
+                    # downloaded: we return after headers and close the connection,
+                    # so the server never streams an untrusted binary into memory.
+                    if not is_html_content_type(content_type):
+                        return FetchResult(
+                            html="",
+                            fetch_mode="http",
+                            status_code=response.status_code,
+                            final_url=final_url,
+                            content_type=content_type,
+                        )
+
+                    # HTML: read up to max_bytes only, then stop.
+                    body = bytearray()
+                    for chunk in response.iter_bytes():
+                        body.extend(chunk)
+                        if len(body) >= self.max_bytes:
+                            del body[self.max_bytes :]
+                            break
+
+                    encoding = response.encoding or "utf-8"
+                    html = bytes(body).decode(encoding, errors="replace")
+                    if not html.strip():
+                        return None
+
                     return FetchResult(
-                        html="",
+                        html=html,
                         fetch_mode="http",
                         status_code=response.status_code,
                         final_url=final_url,
                         content_type=content_type,
                     )
 
-                # HTML: read up to max_bytes only, then stop.
-                body = bytearray()
-                for chunk in response.iter_bytes():
-                    body.extend(chunk)
-                    if len(body) >= self.max_bytes:
-                        del body[self.max_bytes :]
-                        break
-
-                encoding = response.encoding or "utf-8"
-                html = bytes(body).decode(encoding, errors="replace")
-                if not html.strip():
-                    return None
-
-                return FetchResult(
-                    html=html,
-                    fetch_mode="http",
-                    status_code=response.status_code,
-                    final_url=final_url,
-                    content_type=content_type,
-                )
+            logger.warning("Too many redirects for %s", url)
+            return None
+        except SSRFBlockedError:
+            logger.warning("SSRF guard blocked fetch: %s", current)
+            raise
         except Exception as exc:
             logger.warning("HTTP fetch failed for %s: %s", url, exc)
             return None

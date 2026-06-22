@@ -11,7 +11,20 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from src.exceptions import BackendExceptions
 from src.schemas.analyze import PhishingDetectionResponse
 from src.services.fetchers.http_fetcher import FetchResult
+from src.services.net_guard import SSRFBlockedError
 from src.services.reputation import ReputationResult
+import src.services.analyzer as analyzer_mod
+
+
+@pytest.fixture(autouse=True)
+def _pin_model_thresholds():
+    """Pin severity thresholds so analyzer tests don't depend on ambient .env
+    values (e.g. a deployment that raised MODEL_BLOCK_THRESHOLD)."""
+    with (
+        patch.object(analyzer_mod.settings, "MODEL_BLOCK_THRESHOLD", 0.90),
+        patch.object(analyzer_mod.settings, "MODEL_WARN_THRESHOLD", 0.70),
+    ):
+        yield
 
 
 class TestAnalyzerService:
@@ -81,10 +94,10 @@ class TestAnalyzerService:
         self, analyzer_service, mock_request, mock_db_manager
     ):
         """Cached result analysis test"""
-        # Set cached result
+        # Set cached result (high confidence -> block under threshold policy)
         mock_db_manager.get_cached_result.return_value = {
             "is_phishing": True,
-            "confidence": 0.75,
+            "confidence": 0.95,
         }
 
         with (
@@ -109,18 +122,20 @@ class TestAnalyzerService:
 
             assert isinstance(result, PhishingDetectionResponse)
             assert result.result is True
-            assert result.confidence == 0.75
+            assert result.confidence == 0.95
             assert result.source == "cache"
+            assert result.severity == "block"
 
     @pytest.mark.asyncio
     async def test_analyze_ai_model_prediction(
         self, analyzer_service, mock_request, mock_db_manager
     ):
         """AI model prediction analysis test"""
-        # AI model prediction result setting (HTML pipeline)
+        # AI model prediction result setting (HTML pipeline). High confidence so
+        # the navigation severity policy yields a block.
         mock_request.app.state.model.predict_from_html.return_value = {
             "result": True,
-            "confidence": 0.85,
+            "confidence": 0.95,
             "preprocess_ms": 1.0,
             "infer_ms": 1.0,
         }
@@ -154,8 +169,9 @@ class TestAnalyzerService:
 
             assert isinstance(result, PhishingDetectionResponse)
             assert result.result is True
-            assert result.confidence == 0.85
+            assert result.confidence == 0.95
             assert result.source == "model"
+            assert result.severity == "block"
 
             # Check if DB save and cache save are called
             mock_db_manager.save_phishing_url.assert_called_once()
@@ -328,7 +344,7 @@ class TestAnalyzerService:
         )
         mock_request.app.state.model.predict_from_html.return_value = {
             "result": True,
-            "confidence": 0.85,
+            "confidence": 0.95,
             "preprocess_ms": 1.0,
             "infer_ms": 1.0,
         }
@@ -567,6 +583,183 @@ class TestAnalyzerService:
             assert perf_record["fetch_mode"] == "http"
             assert perf_record["stages"]["preprocess"] == 12.5
             assert perf_record["stages"]["inference"] == 8.2
+
+    @pytest.mark.asyncio
+    async def test_navigation_model_warn_threshold(
+        self, analyzer_service, mock_request, mock_db_manager
+    ):
+        """Navigation: model confidence between WARN and BLOCK -> warn (not block)."""
+        mock_request.app.state.model.predict_from_html.return_value = {
+            "result": True,
+            "confidence": 0.75,
+            "preprocess_ms": 1.0,
+            "infer_ms": 1.0,
+        }
+        analyzer_service.fetcher.http_fetcher.fetch = MagicMock(
+            return_value=FetchResult(
+                html="<html>ok</html>", fetch_mode="http", content_type="text/html"
+            )
+        )
+        analyzer_service.fetcher._is_low_quality_html = MagicMock(return_value=False)
+        analyzer_service.fetcher.browser_fetcher.fetch = MagicMock()
+
+        with (
+            patch("src.services.analyzer.get_redis") as mock_get_redis,
+            patch("src.services.analyzer.DomainChecker") as mock_domain_checker_class,
+        ):
+            mock_get_redis.return_value = AsyncMock()
+            mock_domain_checker = AsyncMock()
+            mock_domain_checker.is_whitelisted.return_value = False
+            mock_domain_checker.is_blacklisted.return_value = False
+            mock_domain_checker_class.return_value = mock_domain_checker
+
+            result = await analyzer_service.analyze(
+                url="https://unknown-site.com/page",
+                request=mock_request,
+                db_manager=mock_db_manager,
+            )
+
+        assert result.source == "model"
+        assert result.severity == "warn"
+        assert result.result is False
+
+    @pytest.mark.asyncio
+    async def test_link_context_does_not_block_on_model(
+        self, analyzer_service, mock_request, mock_db_manager
+    ):
+        """A link is never hard-blocked by the model/cache (warn at most)."""
+        mock_db_manager.get_cached_result.return_value = {
+            "is_phishing": True,
+            "confidence": 0.99,
+        }
+
+        with (
+            patch("src.services.analyzer.get_redis") as mock_get_redis,
+            patch("src.services.analyzer.DomainChecker") as mock_domain_checker_class,
+        ):
+            mock_get_redis.return_value = AsyncMock()
+            mock_domain_checker = AsyncMock()
+            mock_domain_checker.is_whitelisted.return_value = False
+            mock_domain_checker.is_blacklisted.return_value = False
+            mock_domain_checker_class.return_value = mock_domain_checker
+
+            result = await analyzer_service.analyze(
+                url="https://unknown-site.com/link",
+                request=mock_request,
+                db_manager=mock_db_manager,
+                context="link",
+            )
+
+        assert result.source == "cache"
+        assert result.severity == "warn"
+        assert result.result is False
+        mock_request.app.state.model.predict_from_html.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_link_context_cache_miss_returns_pending(
+        self, analyzer_service, mock_request, mock_db_manager
+    ):
+        """Link cache-miss returns pending without fetch/model (bg off by default)."""
+        mock_db_manager.get_cached_result.return_value = None
+        analyzer_service.fetcher.http_fetcher.fetch = MagicMock()
+
+        with (
+            patch("src.services.analyzer.get_redis") as mock_get_redis,
+            patch("src.services.analyzer.DomainChecker") as mock_domain_checker_class,
+        ):
+            mock_get_redis.return_value = AsyncMock()
+            mock_domain_checker = AsyncMock()
+            mock_domain_checker.is_whitelisted.return_value = False
+            mock_domain_checker.is_blacklisted.return_value = False
+            mock_domain_checker_class.return_value = mock_domain_checker
+
+            result = await analyzer_service.analyze(
+                url="https://unknown-site.com/link",
+                request=mock_request,
+                db_manager=mock_db_manager,
+                context="link",
+            )
+
+        assert result.status == "pending"
+        assert result.source == "pending"
+        assert result.severity == "allow"
+        assert result.result is False
+        mock_request.app.state.model.predict_from_html.assert_not_called()
+        analyzer_service.fetcher.http_fetcher.fetch.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_ssrf_blocked_returns_blocked_private(
+        self, analyzer_service, mock_request, mock_db_manager
+    ):
+        """An SSRF-blocked fetch is reported as a distinct, observable source."""
+        mock_db_manager.get_cached_result.return_value = None
+        analyzer_service.fetcher.http_fetcher.fetch = MagicMock(
+            side_effect=SSRFBlockedError("blocked")
+        )
+        analyzer_service.fetcher.browser_fetcher.fetch = MagicMock()
+
+        with (
+            patch("src.services.analyzer.get_redis") as mock_get_redis,
+            patch("src.services.analyzer.DomainChecker") as mock_domain_checker_class,
+        ):
+            mock_get_redis.return_value = AsyncMock()
+            mock_domain_checker = AsyncMock()
+            mock_domain_checker.is_whitelisted.return_value = False
+            mock_domain_checker.is_blacklisted.return_value = False
+            mock_domain_checker_class.return_value = mock_domain_checker
+
+            result = await analyzer_service.analyze(
+                url="http://169.254.169.254/latest/meta-data/",
+                request=mock_request,
+                db_manager=mock_db_manager,
+            )
+
+        assert result.source == "blocked_private"
+        assert result.result is False
+        assert result.severity == "allow"
+        mock_request.app.state.model.predict_from_html.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_background_schedule_dedups_by_key(self, analyzer_service):
+        """Duplicate link schedules for the same URL spawn only one task."""
+        analyzer_service._bg_tasks.clear()
+        analyzer_service._bg_inflight_keys.clear()
+        analyzer_service._background_model = MagicMock(return_value=asyncio.sleep(0.02))
+
+        with patch.object(analyzer_mod.settings, "LINK_BACKGROUND_MODEL", True):
+            analyzer_service._maybe_schedule_background(
+                MagicMock(), MagicMock(), "https://x.com/p", "https://x.com/p"
+            )
+            analyzer_service._maybe_schedule_background(
+                MagicMock(), MagicMock(), "https://x.com/p", "https://x.com/p"
+            )
+
+        assert len(analyzer_service._bg_tasks) == 1
+        assert "https://x.com/p" in analyzer_service._bg_inflight_keys
+        analyzer_service._background_model.assert_called_once()
+
+        await asyncio.gather(*list(analyzer_service._bg_tasks), return_exceptions=True)
+        assert analyzer_service._bg_inflight_keys == set()
+
+    @pytest.mark.asyncio
+    async def test_close_cancels_background_tasks(self, analyzer_service):
+        """close() cancels in-flight background tasks and clears tracking state."""
+        analyzer_service._bg_tasks.clear()
+        analyzer_service._bg_inflight_keys.clear()
+
+        async def _never():
+            await asyncio.Event().wait()
+
+        task = asyncio.create_task(_never())
+        analyzer_service._bg_tasks.add(task)
+        analyzer_service._bg_inflight_keys.add("https://x.com/p")
+
+        analyzer_service.close()
+
+        assert analyzer_service._bg_tasks == set()
+        assert analyzer_service._bg_inflight_keys == set()
+        await asyncio.gather(task, return_exceptions=True)
+        assert task.cancelled()
 
     @pytest.mark.asyncio
     async def test_inflight_dedup_waiter_does_not_block_other_keys(

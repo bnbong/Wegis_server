@@ -17,6 +17,7 @@ from src.clients.redis import get_redis
 from src.core.config import settings
 from src.services.fetchers.hybrid_fetcher import HybridFetcher
 from src.services.fetchers.http_fetcher import is_html_content_type
+from src.services.net_guard import SSRFBlockedError
 from src.services.performance import StageTimer, build_perf_record, log_perf_record
 from src.services.reputation import ReputationService
 from src.services.url_utils import canonicalize_url
@@ -27,6 +28,10 @@ logger = logging.getLogger("main")
 class AnalyzerService:
     _inflight_lock = asyncio.Lock()
     _inflight_tasks: dict[str, asyncio.Task[PhishingDetectionResponse]] = {}
+    # Background model analysis for cache-miss links (design 01, opt-in).
+    _bg_tasks: set[asyncio.Task] = set()
+    _bg_inflight_keys: set[str] = set()
+    _bg_semaphore = asyncio.Semaphore(settings.LINK_BG_CONCURRENCY)
 
     def __init__(self):
         self.fetcher = HybridFetcher()
@@ -34,8 +39,67 @@ class AnalyzerService:
         self.browser_semaphore = asyncio.Semaphore(settings.MAX_BROWSER_CONCURRENCY)
         self.infer_semaphore = asyncio.Semaphore(settings.MAX_INFER_CONCURRENCY)
 
+    # ----- response / severity helpers (design 02) -----
+
+    @staticmethod
+    def _model_severity(confidence: float, context: str) -> str:
+        """Map a model confidence (= P(phishing)) to a severity tier.
+
+        A ``link`` is never hard-blocked by the model — only warned — because a
+        link-badge false positive is low-actionability.
+        """
+        if context == "link":
+            return "warn" if confidence >= settings.MODEL_BLOCK_THRESHOLD else "allow"
+        if confidence >= settings.MODEL_BLOCK_THRESHOLD:
+            return "block"
+        if confidence >= settings.MODEL_WARN_THRESHOLD:
+            return "warn"
+        return "allow"
+
+    @staticmethod
+    def _build_response(
+        *,
+        url: str,
+        source: str,
+        confidence: float,
+        fetch_mode: str | None,
+        severity: str,
+        status: str = "final",
+        reason_codes: Optional[list[str]] = None,
+    ) -> PhishingDetectionResponse:
+        return PhishingDetectionResponse.model_validate(
+            {
+                "url": url,
+                "result": severity == "block",
+                "confidence": confidence,
+                "source": source,
+                "fetch_mode": fetch_mode,
+                "severity": severity,
+                "status": status,
+                "reason_codes": reason_codes,
+            }
+        )
+
+    def _cached_response(
+        self, cached: dict, url: str, context: str
+    ) -> PhishingDetectionResponse:
+        confidence = float(cached.get("confidence", 0.0))
+        return self._build_response(
+            url=url,
+            source="cache",
+            confidence=confidence,
+            fetch_mode="none",
+            severity=self._model_severity(confidence, context),
+        )
+
     def close(self) -> None:
         self.fetcher.close()
+        # Best-effort cancel of in-flight background analyses (sync context, so
+        # we cancel without awaiting). Class-level state is shared across instances.
+        for task in list(self._bg_tasks):
+            task.cancel()
+        self._bg_tasks.clear()
+        self._bg_inflight_keys.clear()
 
     async def _check_reputation(
         self, input_url: str, canonical_url: str
@@ -56,15 +120,13 @@ class AnalyzerService:
             return None
 
         logger.info(f"URL {canonical_url} flagged malicious by {result.source}")
-        return PhishingDetectionResponse.model_validate(
-            {
-                "url": canonical_url,
-                "result": True,
-                "confidence": result.confidence,
-                "source": result.source,
-                "fetch_mode": "none",
-                "reason_codes": result.reason_codes or None,
-            }
+        return self._build_response(
+            url=canonical_url,
+            source=result.source,
+            confidence=result.confidence,
+            fetch_mode="none",
+            severity="block",
+            reason_codes=result.reason_codes or None,
         )
 
     async def _cleanup_inflight_task(
@@ -171,6 +233,7 @@ class AnalyzerService:
         url: str,
         request: Request,
         db_manager: Optional[DBManager] = None,
+        context: str = "navigation",
     ) -> PhishingDetectionResponse:
         input_url = url.strip()
         if not input_url:
@@ -183,26 +246,22 @@ class AnalyzerService:
 
         if await domain_checker.is_whitelisted(input_url):
             logger.info(f"URL {canonical_url} is in whitelist")
-            return PhishingDetectionResponse.model_validate(
-                {
-                    "url": canonical_url,
-                    "result": False,
-                    "confidence": 0.01,
-                    "source": "whitelist",
-                    "fetch_mode": "none",
-                }
+            return self._build_response(
+                url=canonical_url,
+                source="whitelist",
+                confidence=0.01,
+                fetch_mode="none",
+                severity="allow",
             )
 
         if await domain_checker.is_blacklisted(input_url):
             logger.info(f"URL {canonical_url} is in blacklist")
-            return PhishingDetectionResponse.model_validate(
-                {
-                    "url": canonical_url,
-                    "result": True,
-                    "confidence": 0.99,
-                    "source": "blacklist",
-                    "fetch_mode": "none",
-                }
+            return self._build_response(
+                url=canonical_url,
+                source="blacklist",
+                confidence=0.99,
+                fetch_mode="none",
+                severity="block",
             )
 
         # URL reputation (threat intelligence) stage: runs before the analysis
@@ -217,118 +276,186 @@ class AnalyzerService:
             db_manager = DBManager()
 
         detector = request.app.state.model
-        timer = StageTimer()
 
-        async def run_pipeline() -> PhishingDetectionResponse:
-            timer.start("cache_lookup")
+        if context == "link":
+            # Links: reputation-only + cache-first. On a cache miss, optionally
+            # schedule a bounded background model run and return a neutral pending.
             cached_result = await db_manager.get_cached_result(canonical_url)
-            timer.stop("cache_lookup")
             if cached_result:
-                self._record_perf(
-                    url=canonical_url,
-                    source="cache",
-                    timer=timer,
-                    fetch_mode="none",
-                    cache_hit=True,
-                )
-                return PhishingDetectionResponse.model_validate(
-                    {
-                        "url": canonical_url,
-                        "result": cached_result["is_phishing"],
-                        "confidence": cached_result["confidence"],
-                        "source": "cache",
-                        "fetch_mode": "none",
-                    }
-                )
+                return self._cached_response(cached_result, canonical_url, context)
+            self._maybe_schedule_background(
+                detector, db_manager, input_url, canonical_url
+            )
+            return self._build_response(
+                url=canonical_url,
+                source="pending",
+                confidence=0.0,
+                fetch_mode="none",
+                severity="allow",
+                status="pending",
+            )
 
-            timer.start("html_fetch")
+        return await self._run_inflight_deduplicated(
+            canonical_url,
+            lambda: self._analyze_with_model(
+                detector, db_manager, input_url, canonical_url, context
+            ),
+        )
+
+    async def _analyze_with_model(
+        self,
+        detector,
+        db_manager: DBManager,
+        input_url: str,
+        canonical_url: str,
+        context: str,
+    ) -> PhishingDetectionResponse:
+        timer = StageTimer()
+        timer.start("cache_lookup")
+        cached_result = await db_manager.get_cached_result(canonical_url)
+        timer.stop("cache_lookup")
+        if cached_result:
+            self._record_perf(
+                url=canonical_url,
+                source="cache",
+                timer=timer,
+                fetch_mode="none",
+                cache_hit=True,
+            )
+            return self._cached_response(cached_result, canonical_url, context)
+
+        timer.start("html_fetch")
+        try:
             html_content, fetch_mode, content_type = await self._fetch_html_once(
                 input_url
             )
+        except SSRFBlockedError:
             timer.stop("html_fetch")
-
-            if not is_html_content_type(content_type):
-                # Non-HTML resource (image/svg/pdf/zip/binary): not valid input for
-                # the HTML phishing model. Return benign without running the model,
-                # escalating to the browser, or caching the result.
-                logger.info(
-                    f"Skipping non-HTML resource {canonical_url} "
-                    f"(content-type={content_type})"
-                )
-                self._record_perf(
-                    url=canonical_url,
-                    source="non_html",
-                    timer=timer,
-                    fetch_mode=fetch_mode,
-                    cache_hit=False,
-                )
-                return PhishingDetectionResponse.model_validate(
-                    {
-                        "url": canonical_url,
-                        "result": False,
-                        "confidence": 0.0,
-                        "source": "non_html",
-                        "fetch_mode": fetch_mode,
-                    }
-                )
-
-            if not html_content:
-                return PhishingDetectionResponse.model_validate(
-                    {
-                        "url": canonical_url,
-                        "result": False,
-                        "confidence": 0.0,
-                        "source": "error",
-                        "fetch_mode": fetch_mode,
-                    }
-                )
-
-            async with self.infer_semaphore:
-                model_result = await asyncio.to_thread(
-                    detector.predict_from_html,
-                    input_url,
-                    html_content,
-                )
-
-            if model_result["confidence"] is None:
-                return PhishingDetectionResponse.model_validate(
-                    {
-                        "url": canonical_url,
-                        "result": False,
-                        "confidence": 0.0,
-                        "source": "error",
-                        "fetch_mode": fetch_mode,
-                    }
-                )
-
-            timer.stages["preprocess"] = model_result.get("preprocess_ms", 0.0)
-            timer.stages["inference"] = model_result.get("infer_ms", 0.0)
-
-            await self._persist_result(
-                db_manager=db_manager,
+            logger.warning(f"SSRF guard blocked fetch for {canonical_url}")
+            return self._build_response(
                 url=canonical_url,
-                result=bool(model_result["result"]),
-                confidence=float(model_result["confidence"]),
-                html_content=html_content,
-                timer=timer,
+                source="blocked_private",
+                confidence=0.0,
+                fetch_mode="none",
+                severity="allow",
             )
+        timer.stop("html_fetch")
 
+        if not is_html_content_type(content_type):
+            # Non-HTML resource (image/svg/pdf/zip/binary): not valid input for the
+            # HTML model. Benign without model/browser/cache.
+            logger.info(
+                f"Skipping non-HTML resource {canonical_url} "
+                f"(content-type={content_type})"
+            )
             self._record_perf(
                 url=canonical_url,
-                source="model",
+                source="non_html",
                 timer=timer,
                 fetch_mode=fetch_mode,
                 cache_hit=False,
             )
-
-            return PhishingDetectionResponse.model_validate(
-                {
-                    "url": canonical_url,
-                    "result": bool(model_result["result"]),
-                    "confidence": float(model_result["confidence"]),
-                    "source": "model",
-                    "fetch_mode": fetch_mode,
-                }
+            return self._build_response(
+                url=canonical_url,
+                source="non_html",
+                confidence=0.0,
+                fetch_mode=fetch_mode,
+                severity="allow",
             )
 
-        return await self._run_inflight_deduplicated(canonical_url, run_pipeline)
+        if not html_content:
+            return self._build_response(
+                url=canonical_url,
+                source="error",
+                confidence=0.0,
+                fetch_mode=fetch_mode,
+                severity="allow",
+            )
+
+        async with self.infer_semaphore:
+            model_result = await asyncio.to_thread(
+                detector.predict_from_html,
+                input_url,
+                html_content,
+            )
+
+        if model_result["confidence"] is None:
+            return self._build_response(
+                url=canonical_url,
+                source="error",
+                confidence=0.0,
+                fetch_mode=fetch_mode,
+                severity="allow",
+            )
+
+        timer.stages["preprocess"] = model_result.get("preprocess_ms", 0.0)
+        timer.stages["inference"] = model_result.get("infer_ms", 0.0)
+
+        confidence = float(model_result["confidence"])
+
+        # Persist the RAW model verdict (is_phishing = prob >= 0.5). Storage is
+        # decoupled from the severity policy; severity is computed at response time.
+        await self._persist_result(
+            db_manager=db_manager,
+            url=canonical_url,
+            result=bool(model_result["result"]),
+            confidence=confidence,
+            html_content=html_content,
+            timer=timer,
+        )
+
+        self._record_perf(
+            url=canonical_url,
+            source="model",
+            timer=timer,
+            fetch_mode=fetch_mode,
+            cache_hit=False,
+        )
+
+        return self._build_response(
+            url=canonical_url,
+            source="model",
+            confidence=confidence,
+            fetch_mode=fetch_mode,
+            severity=self._model_severity(confidence, context),
+        )
+
+    def _maybe_schedule_background(
+        self, detector, db_manager: DBManager, input_url: str, canonical_url: str
+    ) -> None:
+        if not settings.LINK_BACKGROUND_MODEL:
+            return
+        # Dedup duplicate schedules for the same canonical URL up front, so a
+        # link batch with repeats doesn't spawn N tasks just to dedup later.
+        if canonical_url in self._bg_inflight_keys:
+            return
+        if len(self._bg_tasks) >= settings.LINK_BG_MAX_INFLIGHT:
+            logger.warning("Link background queue full; dropping %s", canonical_url)
+            return
+        self._bg_inflight_keys.add(canonical_url)
+        task = asyncio.create_task(
+            self._background_model(detector, db_manager, input_url, canonical_url)
+        )
+        self._bg_tasks.add(task)
+
+        def _done(completed: asyncio.Task, key: str = canonical_url) -> None:
+            self._bg_tasks.discard(completed)
+            self._bg_inflight_keys.discard(key)
+
+        task.add_done_callback(_done)
+
+    async def _background_model(
+        self, detector, db_manager: DBManager, input_url: str, canonical_url: str
+    ) -> None:
+        async with self._bg_semaphore:
+            try:
+                await self._run_inflight_deduplicated(
+                    canonical_url,
+                    lambda: self._analyze_with_model(
+                        detector, db_manager, input_url, canonical_url, "navigation"
+                    ),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Background analysis failed for %s: %s", canonical_url, exc
+                )

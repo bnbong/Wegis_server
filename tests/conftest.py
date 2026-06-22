@@ -125,6 +125,9 @@ def analyzer_service():
     """
     with patch("src.services.fetchers.browser_fetcher.HTMLLoader"):
         service = AnalyzerService()
+        # Reputation defaults to a no-op (no external calls) so model-path tests
+        # are deterministic; reputation-specific tests override this.
+        service.reputation_service.check = AsyncMock(return_value=None)
         yield service
         service.close()
 

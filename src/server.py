@@ -15,6 +15,7 @@ from src.database import DBManager
 from src.services.model.manager import PhishingDetector
 from src.services.analyzer import AnalyzerService
 from src.api.main import router as api_router
+from src.api.middleware import register_middleware
 from src.clients.redis import init_redis, close_redis
 
 
@@ -83,6 +84,9 @@ if settings.all_cors_origins:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+# Concurrency cap + rate limiting + optional token auth (fail-open, /analyze only).
+register_middleware(app)
 
 
 app.include_router(api_router)

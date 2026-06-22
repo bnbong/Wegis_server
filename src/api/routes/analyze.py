@@ -98,6 +98,7 @@ async def check_url(
         url=request_data.url,
         request=request,
         db_manager=db_manager,
+        context=request_data.context,
     )
 
     response: ResponseSchema[PhishingDetectionResponse] = ResponseSchema(
@@ -119,14 +120,29 @@ async def check_urls_batch(
     """
     analyzer = getattr(request.app.state, "analyzer_service", None) or AnalyzerService()
 
-    async def analyze_single_url(url: str) -> PhishingDetectionResponse:
-        return await analyzer.analyze(
-            url=url,
-            request=request,
-            db_manager=db_manager,
+    # Cap batch size so one page's link explosion cannot self-DoS the server.
+    capped_urls = urls[: settings.MAX_BATCH_URLS]
+    if len(urls) > settings.MAX_BATCH_URLS:
+        logger.warning(
+            "Batch of %d URLs trimmed to %d", len(urls), settings.MAX_BATCH_URLS
         )
 
-    deduped_urls: list[str] = list(dict.fromkeys(urls))
+    # Bound in-batch concurrency; per-URL timeout so one slow link can't stall all.
+    batch_semaphore = asyncio.Semaphore(settings.BATCH_CONCURRENCY)
+
+    async def analyze_single_url(url: str) -> PhishingDetectionResponse:
+        async with batch_semaphore:
+            return await asyncio.wait_for(
+                analyzer.analyze(
+                    url=url,
+                    request=request,
+                    db_manager=db_manager,
+                    context="link",
+                ),
+                timeout=settings.BATCH_PER_URL_TIMEOUT,
+            )
+
+    deduped_urls: list[str] = list(dict.fromkeys(capped_urls))
     tasks = {url: asyncio.create_task(analyze_single_url(url)) for url in deduped_urls}
     gathered = await asyncio.gather(*tasks.values(), return_exceptions=True)
     result_map: dict[str, PhishingDetectionResponse] = {}
@@ -141,11 +157,26 @@ async def check_urls_batch(
             confidence=0.0,
             source="error",
             fetch_mode="none",
+            severity="allow",
+            status="final",
+        )
+
+    # Placeholder for URLs dropped by the size cap. status="pending" (NOT "final")
+    # so the client treats them as "not analyzed", not "confirmed safe".
+    def _placeholder(url: str) -> PhishingDetectionResponse:
+        return PhishingDetectionResponse(
+            url=url,
+            result=False,
+            confidence=0.0,
+            source="skipped",
+            fetch_mode="none",
+            severity="allow",
+            status="pending",
         )
 
     processed_results: List[PhishingDetectionResponse] = []
     for url in urls:
-        processed_results.append(result_map[url])
+        processed_results.append(result_map.get(url) or _placeholder(url))
 
     response: ResponseSchema[List[PhishingDetectionResponse]] = ResponseSchema(
         timestamp=datetime.now().isoformat(),

@@ -140,6 +140,39 @@ class Settings(BaseSettings):
     VIRUSTOTAL_MALICIOUS_THRESHOLD: int = 2
     VIRUSTOTAL_SUBMIT_UNKNOWN: bool = False
 
+    # --- Block-signal policy (design 02) ---
+    # Model confidence (= P(phishing)) thresholds. Calibrate with data.
+    MODEL_BLOCK_THRESHOLD: float = 0.90
+    MODEL_WARN_THRESHOLD: float = 0.70
+
+    # --- Analysis trigger policy (design 01) ---
+    # Links (page-discovered URLs) are reputation-only + cache-first by default.
+    # When enabled, a cache-miss link schedules a bounded background model run.
+    LINK_BACKGROUND_MODEL: bool = False
+    LINK_BG_CONCURRENCY: int = 4
+    LINK_BG_MAX_INFLIGHT: int = 256
+
+    # --- Operational safety (design 03) ---
+    # Batch guards
+    MAX_BATCH_URLS: int = 50
+    BATCH_CONCURRENCY: int = 8
+    BATCH_PER_URL_TIMEOUT: float = 6.0
+    # Global in-flight request cap (429 beyond this)
+    MAX_CONCURRENT_REQUESTS: int = 32
+    # SSRF guard for outbound fetches
+    SSRF_GUARD_ENABLED: bool = True
+    FETCH_MAX_REDIRECTS: int = 3
+    # Rate limiting (Redis-backed, fail-open) + optional static-token auth
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_CHECK_PER_MIN: int = 120
+    RATE_LIMIT_BATCH_PER_MIN: int = 12
+    WEGIS_API_TOKENS: str = ""
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def api_tokens(self) -> set[str]:
+        return {t.strip() for t in self.WEGIS_API_TOKENS.split(",") if t.strip()}
+
     BENCHMARK_OUTPUT_DIR: str = "./log/benchmarks"
     ENABLE_PERF_RECORDS: bool | None = None
 

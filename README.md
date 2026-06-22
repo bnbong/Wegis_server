@@ -85,6 +85,19 @@ make up
 - Non-HTML resources are not sent to the HTML model. They return `result=false`, `source="non_html"`, and are not cached.
 - Reputation hits return `result=true`, `source="reputation:<provider>"`.
 
+### Request policy
+
+- `check` uses `context=navigation` and runs the full pipeline.
+- `batch` uses `context=link`: reputation/cache only; cache misses return `status="pending"` unless `LINK_BACKGROUND_MODEL=true`.
+- Responses include `severity: block | warn | allow`; `result` is true only for `block`.
+- Blacklist and reputation can block. Model/cache signals are thresholded and never hard-block links.
+
+### Operational safety
+
+- Batch size/concurrency/timeout are bounded (`MAX_BATCH_URLS`, `BATCH_CONCURRENCY`, `BATCH_PER_URL_TIMEOUT`); global overload returns 429.
+- SSRF guard allows only public http(s) targets on ports 80/443 and re-validates redirects.
+- `/analyze/*` supports Redis rate limits and optional `X-Wegis-Token` auth via `WEGIS_API_TOKENS`.
+
 ### Caching
 
 - Analysis results: `wegis:analysis:*`.

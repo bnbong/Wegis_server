@@ -60,8 +60,21 @@ services:
       sh -c '
         set -euf
         REDIS_DB_INDEX="${REDIS_DB:-0}"
-        WHITELIST_DOMAINS="google.com amazon.com microsoft.com apple.com facebook.com instagram.com twitter.com linkedin.com github.com githubusercontent.com stackoverflow.com wikipedia.org youtube.com netflix.com cnn.com bbc.com nytimes.com reddit.com openai.com naver.com daum.net kakao.com samsung.com lg.com"
-        WHITELIST_PATTERNS="*.google.com *.amazon.com *.microsoft.com *.apple.com *.github.com *.githubusercontent.com *.stackoverflow.com *.wikipedia.org *.youtube.com *.naver.com *.kakao.com"
+        # Registrable domains, space-separated on ONE line (no backslash
+        # continuations — those previously leaked a literal "\" member). Membership
+        # is checked at the registrable level, so one entry (e.g. google.com) also
+        # covers its subdomains AND short-circuits reputation+model. Therefore we
+        # ONLY list first-party login/home/official-API/brand domains and DELIBERATELY
+        # exclude anything that can host user content / files / pages / object
+        # storage (which would be a phishing-hosting blind spot):
+        #   googleapis.com (storage.googleapis.com), gstatic.com, githubusercontent.com,
+        #   gitlab.com/bitbucket.org (user pages/repos), dropbox.com, onedrive.com,
+        #   sharepoint.com, wikimedia.org (uploads), *cdn/*static (pstatic/daumcdn/
+        #   kakaocdn/licdn), *.amazonaws.com, blogspot.com, tistory.com, ...
+        # Non-HTML assets (e.g. GitHub camo images) are already handled by the
+        # non-HTML guard, so they no longer need a whitelist entry.
+        WHITELIST_DOMAINS="google.com gmail.com youtube.com youtu.be android.com chromium.org microsoft.com microsoftonline.com office.com live.com outlook.com bing.com msn.com windows.com azure.com xbox.com skype.com apple.com icloud.com amazon.com facebook.com fb.com instagram.com whatsapp.com messenger.com meta.com threads.net twitter.com x.com linkedin.com github.com stackoverflow.com stackexchange.com wikipedia.org reddit.com netflix.com spotify.com paypal.com slack.com zoom.us adobe.com cloudflare.com mozilla.org wordpress.org yahoo.com ebay.com openai.com anthropic.com claude.ai oracle.com ibm.com intel.com nvidia.com cisco.com salesforce.com cnn.com bbc.com bbc.co.uk nytimes.com theguardian.com reuters.com bloomberg.com naver.com daum.net kakao.com nate.com samsung.com lg.com lge.com coupang.com 11st.co.kr gmarket.co.kr auction.co.kr interpark.com ssg.com lotte.com baemin.com toss.im payco.com kbstar.com shinhan.com wooribank.com hanabank.com ibk.co.kr kt.com sktelecom.com lguplus.com korea.kr gov.kr"
+        WHITELIST_PATTERNS="*.google.com *.microsoft.com *.apple.com *.naver.com *.kakao.com"
 
         echo "Initializing Redis whitelist (DB $REDIS_DB_INDEX)..."
         for d in $WHITELIST_DOMAINS; do

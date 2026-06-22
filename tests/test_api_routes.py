@@ -192,6 +192,55 @@ class TestAnalyzeEndpoints:
             assert data["data"][2]["confidence"] == 0.95
             assert data["data"][2]["source"] == "blacklist"
 
+    def test_batch_uses_link_context(self, client, mock_db_manager):
+        """The batch endpoint must analyze every URL with context='link'."""
+        with (
+            patch("src.api.routes.analyze.AnalyzerService") as mock_analyzer_class,
+            patch("src.api.deps.DBManager", return_value=mock_db_manager),
+        ):
+            mock_analyzer = AsyncMock()
+            mock_analyzer.analyze.return_value = PhishingDetectionResponse(
+                result=False, confidence=0.0, source="pending", status="pending"
+            )
+            mock_analyzer_class.return_value = mock_analyzer
+
+            response = client.post(
+                "/analyze/batch", json=["https://a.com", "https://b.com"]
+            )
+
+        assert response.status_code == 200
+        assert mock_analyzer.analyze.call_args_list  # was called
+        for call in mock_analyzer.analyze.call_args_list:
+            assert call.kwargs["context"] == "link"
+
+    def test_batch_caps_and_marks_trimmed_pending(self, client, mock_db_manager):
+        """URLs beyond MAX_BATCH_URLS are returned as pending/skipped, not safe."""
+        with (
+            patch("src.api.routes.analyze.AnalyzerService") as mock_analyzer_class,
+            patch("src.api.deps.DBManager", return_value=mock_db_manager),
+            patch("src.api.routes.analyze.settings.MAX_BATCH_URLS", 2),
+        ):
+            mock_analyzer = AsyncMock()
+            mock_analyzer.analyze.return_value = PhishingDetectionResponse(
+                result=False, confidence=0.0, source="pending", status="pending"
+            )
+            mock_analyzer_class.return_value = mock_analyzer
+
+            response = client.post(
+                "/analyze/batch",
+                json=["https://a.com", "https://b.com", "https://c.com"],
+            )
+
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert len(data) == 3
+        # Only the first 2 were actually analyzed.
+        assert mock_analyzer.analyze.await_count == 2
+        # The trimmed 3rd is marked not-analyzed, not "final safe".
+        assert data[2]["source"] == "skipped"
+        assert data[2]["status"] == "pending"
+        assert data[2]["result"] is False
+
     def test_check_batch_urls_with_error(self, client, mock_db_manager):
         """Batch URL analysis with error test"""
         with (
