@@ -5,6 +5,7 @@
 # --------------------------------------------------------------------------
 import asyncio
 
+import httpx
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
@@ -884,6 +885,54 @@ class TestAnalyzerService:
         assert result.result is False
         assert result.severity == "allow"
         mock_request.app.state.model.predict_from_html.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_redirect_to_internal_yields_blocked_private(
+        self, analyzer_service, mock_request, mock_db_manager
+    ):
+        """A public URL redirecting to an internal IP surfaces as blocked_private
+        end-to-end (the redirect hop is SSRF-validated in the real HTTPFetcher)."""
+        mock_db_manager.get_cached_result.return_value = None
+
+        redirect_resp = MagicMock()
+        redirect_resp.is_redirect = True
+        redirect_resp.headers = {"location": "http://169.254.169.254/"}
+        redirect_resp.url = httpx.URL("http://pub.example.com/")
+        cm = MagicMock()
+        cm.__enter__.return_value = redirect_resp
+        cm.__exit__.return_value = False
+        analyzer_service.fetcher.http_fetcher._client = MagicMock()
+        analyzer_service.fetcher.http_fetcher._client.stream.return_value = cm
+        analyzer_service.fetcher.browser_fetcher.fetch = MagicMock()
+
+        with (
+            patch("src.services.analyzer.get_redis") as mock_get_redis,
+            patch("src.services.analyzer.DomainChecker") as mock_domain_checker_class,
+            patch(
+                "src.services.fetchers.http_fetcher.settings.SSRF_GUARD_ENABLED", True
+            ),
+            patch(
+                "src.services.fetchers.http_fetcher.validate_public_url",
+                side_effect=[True, False],  # initial public, redirect internal
+            ),
+        ):
+            mock_get_redis.return_value = AsyncMock()
+            mock_domain_checker = AsyncMock()
+            mock_domain_checker.is_whitelisted.return_value = False
+            mock_domain_checker.is_blacklisted.return_value = False
+            mock_domain_checker_class.return_value = mock_domain_checker
+
+            result = await analyzer_service.analyze(
+                url="http://pub.example.com/",
+                request=mock_request,
+                db_manager=mock_db_manager,
+            )
+
+        assert result.source == "blocked_private"
+        assert result.severity == "allow"
+        assert result.result is False
+        # The redirect SSRF block must skip the browser fallback too.
+        analyzer_service.fetcher.browser_fetcher.fetch.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_background_schedule_dedups_by_key(self, analyzer_service):

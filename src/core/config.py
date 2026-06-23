@@ -33,7 +33,9 @@ def parse_cors(v: Any) -> list[str] | str:
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # ENV_FILE lets tests load env.test instead of the production .env, so the
+        # suite is hermetic (no production keys/hosts leak in). Defaults to .env.
+        env_file=os.getenv("ENV_FILE", ".env"),
         env_ignore_empty=True,
         extra="ignore",
     )

@@ -3,22 +3,24 @@
 #
 # @author bnbong bbbong9@gmail.com
 # --------------------------------------------------------------------------
-import pytest
-import pytest_asyncio
-import redis.asyncio as aioredis
-from unittest.mock import MagicMock, AsyncMock, patch
-from fastapi import Request
-from fastapi.testclient import TestClient
+# Force the test settings file BEFORE importing anything that builds Settings,
+# so the suite is hermetic (env.test, not the production .env). Honors an
+# externally-set ENV_FILE (e.g. `make test`).
+import os
 
-# Load test environment variables before importing settings
-from dotenv import load_dotenv
+os.environ.setdefault("ENV_FILE", "env.test")
 
-from src.server import app
-from src.services.domain_checker import DomainChecker
-from src.services.analyzer import AnalyzerService
-from src.schemas.analyze import PhishingDetectionResponse
+import pytest  # noqa: E402
+import pytest_asyncio  # noqa: E402
+import redis.asyncio as aioredis  # noqa: E402
+from unittest.mock import MagicMock, AsyncMock, patch  # noqa: E402
+from fastapi import Request  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
 
-load_dotenv("env.test", override=True)
+from src.server import app  # noqa: E402
+from src.services.domain_checker import DomainChecker  # noqa: E402
+from src.services.analyzer import AnalyzerService  # noqa: E402
+from src.schemas.analyze import PhishingDetectionResponse  # noqa: E402
 
 # ============================================================================
 # Pytest configuration
