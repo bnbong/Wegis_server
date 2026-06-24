@@ -169,11 +169,27 @@ class Settings(BaseSettings):
     # SSRF guard for outbound fetches
     SSRF_GUARD_ENABLED: bool = True
     FETCH_MAX_REDIRECTS: int = 3
-    # Rate limiting (Redis-backed, fail-open) + optional static-token auth
+    # Rate limiting (Redis-backed, fail-open)
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_CHECK_PER_MIN: int = 120
     RATE_LIMIT_BATCH_PER_MIN: int = 12
-    WEGIS_API_TOKENS: str = ""
+    # Trusted-proxy header carrying the real client IP (e.g. "cf-connecting-ip"
+    # behind Cloudflare). Empty = use the socket peer (request.client.host).
+    # ONLY set this when the origin accepts traffic only from the trusted proxy;
+    # otherwise the header is client-spoofable.
+    CLIENT_IP_HEADER: str = ""
+
+    # --- Auth (design 05) ---
+    # off         : no auth (default; dev / unpacked testing)
+    # static      : X-Wegis-Token must be in WEGIS_API_TOKENS (closed beta)
+    # registration: X-Wegis-Token must be a live per-install token issued by
+    #               POST /auth/register (public launch)
+    AUTH_MODE: Literal["off", "static", "registration"] = "off"
+    WEGIS_API_TOKENS: str = ""  # static mode only
+    # registration mode:
+    REGISTRATION_BOOTSTRAP_SECRET: str = ""  # gates POST /auth/register
+    REGISTRATION_RATE_LIMIT_PER_HOUR: int = 5  # per client IP
+    AUTH_TOKEN_CACHE_TTL: int = 300  # seconds; Redis cache for token validation
 
     @computed_field  # type: ignore[prop-decorator]
     @property

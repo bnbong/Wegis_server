@@ -13,7 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from src.core.config import settings
-from src.orm_models import PhishingURL
+from src.orm_models import PhishingURL, APIClient
 from src.clients.redis import get_redis
 from src.services.url_utils import canonicalize_url
 
@@ -157,5 +157,51 @@ class DBManager:
             return session.exec(
                 statement.order_by(desc("detection_time")).limit(limit).offset(offset)
             ).all()
+        finally:
+            session.close()
+
+    # API client (per-install auth) operations
+    def register_client(
+        self, token_hash: str, install_id: str, ext_version: Optional[str] = None
+    ) -> None:
+        """Persist a newly issued per-install API client (token hash only)."""
+        session = self.get_postgres_session()
+        try:
+            session.add(
+                APIClient(
+                    token_hash=token_hash,
+                    install_id=install_id,
+                    status="active",
+                    ext_version=ext_version,
+                )
+            )
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error registering API client: {e}")
+            raise
+        finally:
+            session.close()
+
+    def get_client_status(self, token_hash: str) -> Optional[str]:
+        """Return the client status (active|revoked) or None if unknown."""
+        session = self.get_postgres_session()
+        try:
+            client = session.get(APIClient, token_hash)
+            return client.status if client else None
+        finally:
+            session.close()
+
+    def revoke_client(self, token_hash: str) -> bool:
+        """Revoke a client token. Returns True if a client was found."""
+        session = self.get_postgres_session()
+        try:
+            client = session.get(APIClient, token_hash)
+            if client is None:
+                return False
+            client.status = "revoked"
+            session.add(client)
+            session.commit()
+            return True
         finally:
             session.close()

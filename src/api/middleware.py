@@ -16,6 +16,8 @@ from fastapi.responses import JSONResponse
 
 from src.core.config import settings
 from src.clients.redis import get_redis
+from src.api.deps import get_client_ip
+from src.services.auth_tokens import hash_token, is_token_valid
 
 logger = logging.getLogger("main")
 
@@ -33,10 +35,12 @@ _limiter_disabled_until = 0.0
 
 def _client_key(request) -> str:
     token = request.headers.get("x-wegis-token")
-    if token:
-        return f"tok:{token}"
-    client = request.client
-    return f"ip:{client.host if client else 'unknown'}"
+    # Key on the token only when auth is active (the token is then already
+    # validated by the auth middleware) and store its HASH, never the plaintext.
+    # In off mode an arbitrary token must NOT let a caller dodge the per-IP limit.
+    if token and settings.AUTH_MODE != "off":
+        return f"tok:{hash_token(token)}"
+    return f"ip:{get_client_ip(request)}"
 
 
 def _too_many(detail: str, retry_after: str) -> JSONResponse:
@@ -97,8 +101,18 @@ def register_middleware(app: FastAPI) -> None:
 
     @app.middleware("http")
     async def auth_mw(request, call_next):
-        tokens = settings.api_tokens
-        if tokens and request.url.path.startswith(_PROTECTED_PREFIX):
-            if request.headers.get("x-wegis-token") not in tokens:
-                return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+        mode = settings.AUTH_MODE
+        if mode == "off" or not request.url.path.startswith(_PROTECTED_PREFIX):
+            return await call_next(request)
+
+        token = request.headers.get("x-wegis-token", "")
+        if mode == "static":
+            ok = token in settings.api_tokens
+        elif mode == "registration":
+            ok = await is_token_valid(token)
+        else:
+            ok = True
+
+        if not ok:
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
         return await call_next(request)
