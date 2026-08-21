@@ -45,3 +45,35 @@ class APIClient(SQLModel, table=True):
     created_at: datetime = SQLField(default_factory=datetime.now)
     last_seen_at: Optional[datetime] = None
     ext_version: Optional[str] = None
+
+
+class Feedback(SQLModel, table=True):
+    """User-reported false positive / false negative (POST /feedback).
+
+    Rows are a REVIEW QUEUE, never a rule source: every column here is
+    attacker-controlled input, so feeding `user_label` straight into the
+    blacklist/whitelist would hand anyone a way to poison verdicts (mass
+    "false_positive" reports to unblock a phishing page, mass "false_negative"
+    reports to blocklist a competitor). Rows therefore land as
+    review_status="pending" and are promoted only by an offline, reviewed step.
+    """
+
+    __tablename__ = "feedback_reports"
+    __table_args__ = (
+        CheckConstraint(
+            "review_status IN ('pending', 'reviewed', 'applied', 'rejected')",
+            name="ck_feedback_reports_review_status",
+        ),
+    )
+
+    id: Optional[int] = SQLField(default=None, primary_key=True)
+    url: str = SQLField(index=True)  # canonicalized, matches the analysis cache key
+    reported_verdict: Optional[str] = None
+    user_label: Optional[str] = None
+    context: Optional[str] = None
+    ext_version: Optional[str] = None
+    # SHA-256 of the caller's token, or of its IP when no token was sent. The
+    # raw identifier is never stored.
+    client_id_hash: str = SQLField(index=True)
+    review_status: str = SQLField(default="pending")
+    created_at: datetime = SQLField(default_factory=datetime.now)

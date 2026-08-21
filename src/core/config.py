@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     BACKEND_CORS_ORIGINS: Annotated[
         list[AnyUrl] | str, BeforeValidator(parse_cors)
     ] = []
+    # Matched (fullmatch) against the request Origin in addition to the explicit
+    # list above. The extension calls from chrome-extension://<id>, and the id
+    # differs per build/store listing, so it cannot be enumerated. Set to "" to
+    # allow only the explicit origins.
+    CORS_ORIGIN_REGEX: str = "^chrome-extension://.*$"
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -169,10 +174,17 @@ class Settings(BaseSettings):
     # SSRF guard for outbound fetches
     SSRF_GUARD_ENABLED: bool = True
     FETCH_MAX_REDIRECTS: int = 3
+    # Browser (Selenium) fallback. The HTTP path pins each hop to the address
+    # the SSRF guard inspected, but Chrome resolves DNS itself, so a rebinding
+    # window remains on this path only. Turn it off where no egress firewall
+    # backstops that residual risk.
+    BROWSER_FETCH_ENABLED: bool = True
     # Rate limiting (Redis-backed, fail-open)
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_CHECK_PER_MIN: int = 120
     RATE_LIMIT_BATCH_PER_MIN: int = 12
+    # Feedback is user-initiated (one report per click), so it is low-volume.
+    RATE_LIMIT_FEEDBACK_PER_MIN: int = 30
     # Trusted-proxy header carrying the real client IP (e.g. "cf-connecting-ip"
     # behind Cloudflare). Empty = use the socket peer (request.client.host).
     # ONLY set this when the origin accepts traffic only from the trusted proxy;
@@ -190,6 +202,10 @@ class Settings(BaseSettings):
     REGISTRATION_BOOTSTRAP_SECRET: str = ""  # gates POST /auth/register
     REGISTRATION_RATE_LIMIT_PER_HOUR: int = 5  # per client IP
     AUTH_TOKEN_CACHE_TTL: int = 300  # seconds; Redis cache for token validation
+    # Failed auth attempts allowed per client IP per minute. Rejected requests
+    # never reach the rate limiter (auth runs first), so this bounds token
+    # brute-force and the token lookups it would otherwise trigger.
+    AUTH_FAIL_LIMIT_PER_MIN: int = 30
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -210,11 +226,29 @@ class Settings(BaseSettings):
             else:
                 raise ValueError(message)
 
+    def _promote_auth_mode_for_static_tokens(self) -> None:
+        """Turn auth on when only WEGIS_API_TOKENS was configured.
+
+        The client integration contract documents setting WEGIS_API_TOKENS as the
+        way to require a token, so leaving AUTH_MODE at its "off" default would
+        serve /analyze/* unauthenticated against the operator's intent.
+        """
+        # api_tokens (not the raw string) so a blank/whitespace value cannot
+        # promote the server into static mode with an empty allowlist.
+        if self.api_tokens and self.AUTH_MODE == "off":
+            self.AUTH_MODE = "static"
+            warnings.warn(
+                'WEGIS_API_TOKENS is set while AUTH_MODE is "off"; promoting '
+                'AUTH_MODE to "static". Set AUTH_MODE explicitly to silence this.',
+                stacklevel=1,
+            )
+
     @model_validator(mode="after")
     def _enforce_non_default_secrets(self) -> Self:
         if self.ENABLE_PERF_RECORDS is None:
             self.ENABLE_PERF_RECORDS = self.ENVIRONMENT != "production"
         self._check_default_secret("SECRET_KEY", self.SECRET_KEY)
+        self._promote_auth_mode_for_static_tokens()
         return self
 
 

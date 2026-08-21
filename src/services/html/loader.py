@@ -39,39 +39,15 @@ class HTMLLoader:
 
     # TODO : Handle case of short url or redirect url
 
-    def _normalize_url(self, url: str) -> str:
-        if url.startswith("http://"):
-            protocol = "http://"
-            rest = url[7:]
-        elif url.startswith("https://"):
-            protocol = "https://"
-            rest = url[8:]
-        else:
-            protocol = ""
-            rest = url
-        if not rest.startswith("www."):
-            rest = "www." + rest
-        if not rest.endswith("/") and ("?" not in rest and "#" not in rest):
-            rest += "/"
-        return protocol + rest
-
     def __load_url(self, driver, url: str) -> str:
-        url = self._normalize_url(url)
+        # ``url`` is used verbatim. The caller normalized and SSRF-validated
+        # this exact string, so rewriting it here (scheme, host) would drive the
+        # browser to a target the guard never inspected.
+        if not url.startswith(("http://", "https://")):
+            raise BackendExceptions(f"URL must be an absolute http(s) URL: {url}")
         try:
-            if not (url.startswith("http://") or url.startswith("https://")):
-                # Try HTTP first
-                try:
-                    http_url = f"http://{url}"
-                    driver.get(http_url)
-                    return http_url
-                except TimeoutException:
-                    # If HTTP fails, try HTTPS
-                    https_url = f"https://{url}"
-                    driver.get(https_url)
-                    return https_url
-            else:
-                driver.get(url)
-                return url
+            driver.get(url)
+            return url
         except TimeoutException:
             logger.error(f"Timeout while loading URL: {url}")
             raise BackendExceptions("Timeout while loading URL")
@@ -80,6 +56,11 @@ class HTMLLoader:
             raise BackendExceptions(e)
 
     def load(self, url: str) -> str | None:
+        """Load ``url`` in a headless browser and return its page source.
+
+        ``url`` must already be an absolute http(s) URL that the caller has
+        SSRF-validated; it reaches ``driver.get`` unchanged.
+        """
         for attempt in range(self.retries):
             driver = None
             try:

@@ -4,7 +4,8 @@
 # Tokens are issued by POST /auth/register and validated on /analyze/*. Only the
 # SHA-256 hash is stored. Validation is Redis-cache-fronted with a PostgreSQL
 # fallback. Infra errors fail OPEN (consistent with the rate limiter): auth here
-# is abuse control + per-install revocation, not a strong secret.
+# is abuse control + per-install revocation, not a strong secret. Brute-force is
+# additionally mitigated by the per-IP auth-failure limiter in the middleware.
 #
 # @author bnbong bbbong9@gmail.com
 # --------------------------------------------------------------------------
@@ -37,7 +38,9 @@ def bootstrap_ok(provided: str | None) -> bool:
     if not secret:
         # Registration must not be open without a configured bootstrap secret.
         return False
-    return hmac.compare_digest(provided or "", secret)
+    # Compare BYTES: the value comes from a header and may be non-ASCII, which
+    # compare_digest rejects for str (a TypeError here would 500 the endpoint).
+    return hmac.compare_digest((provided or "").encode(), secret.encode())
 
 
 async def is_token_valid(token: str) -> bool:

@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from src.exceptions import BackendExceptions
 from src.schemas.analyze import PhishingDetectionResponse
 from src.services.fetchers.http_fetcher import FetchResult
-from src.services.net_guard import SSRFBlockedError
+from src.services.net_guard import ResolvedTarget, SSRFBlockedError
 from src.services.reputation import ReputationResult
 import src.services.analyzer as analyzer_mod
 
@@ -855,6 +855,121 @@ class TestAnalyzerService:
         assert mock_db_manager.save_phishing_url.call_args.args[1] is False
 
     @pytest.mark.asyncio
+    async def test_redis_cache_failure_keeps_block_verdict(
+        self, analyzer_service, mock_request, mock_db_manager
+    ):
+        """A Redis cache write failure must not downgrade a computed block.
+
+        Persistence is a side effect; letting it escape would surface as the
+        caller's error fallback (allow), i.e. a fail-open on a phishing page.
+        """
+        mock_request.app.state.model.predict_from_html.return_value = {
+            "result": True,
+            "confidence": 0.95,
+            "preprocess_ms": 1.0,
+            "infer_ms": 1.0,
+        }
+        mock_db_manager.cache_result = AsyncMock(side_effect=RuntimeError("redis down"))
+        analyzer_service.fetcher.http_fetcher.fetch = MagicMock(
+            return_value=FetchResult(
+                html="<html>ok</html>", fetch_mode="http", content_type="text/html"
+            )
+        )
+        analyzer_service.fetcher._is_low_quality_html = MagicMock(return_value=False)
+        analyzer_service.fetcher.browser_fetcher.fetch = MagicMock()
+
+        with (
+            patch("src.services.analyzer.get_redis") as mock_get_redis,
+            patch("src.services.analyzer.DomainChecker") as mock_domain_checker_class,
+        ):
+            mock_get_redis.return_value = AsyncMock()
+            mock_domain_checker = AsyncMock()
+            mock_domain_checker.is_whitelisted.return_value = False
+            mock_domain_checker.is_blacklisted.return_value = False
+            mock_domain_checker_class.return_value = mock_domain_checker
+
+            result = await analyzer_service.analyze(
+                url="https://cache-fail.com/login",
+                request=mock_request,
+                db_manager=mock_db_manager,
+            )
+
+        assert result.source == "model"
+        assert result.severity == "block"
+        assert result.result is True
+        assert result.confidence == 0.95
+
+    @pytest.mark.asyncio
+    async def test_postgres_write_failure_keeps_block_verdict(
+        self, analyzer_service, mock_request, mock_db_manager
+    ):
+        """A PostgreSQL history write failure must not downgrade a computed block."""
+        mock_request.app.state.model.predict_from_html.return_value = {
+            "result": True,
+            "confidence": 0.95,
+            "preprocess_ms": 1.0,
+            "infer_ms": 1.0,
+        }
+        mock_db_manager.save_phishing_url = MagicMock(
+            side_effect=RuntimeError("postgres down")
+        )
+        analyzer_service.fetcher.http_fetcher.fetch = MagicMock(
+            return_value=FetchResult(
+                html="<html>ok</html>", fetch_mode="http", content_type="text/html"
+            )
+        )
+        analyzer_service.fetcher._is_low_quality_html = MagicMock(return_value=False)
+        analyzer_service.fetcher.browser_fetcher.fetch = MagicMock()
+
+        with (
+            patch("src.services.analyzer.get_redis") as mock_get_redis,
+            patch("src.services.analyzer.DomainChecker") as mock_domain_checker_class,
+        ):
+            mock_get_redis.return_value = AsyncMock()
+            mock_domain_checker = AsyncMock()
+            mock_domain_checker.is_whitelisted.return_value = False
+            mock_domain_checker.is_blacklisted.return_value = False
+            mock_domain_checker_class.return_value = mock_domain_checker
+
+            result = await analyzer_service.analyze(
+                url="https://pg-fail.com/login",
+                request=mock_request,
+                db_manager=mock_db_manager,
+            )
+
+        assert result.source == "model"
+        assert result.severity == "block"
+        assert result.result is True
+        # The Postgres write is attempted first, so the Redis cache never runs.
+        mock_db_manager.save_phishing_url.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_fetch_failure_still_propagates(
+        self, analyzer_service, mock_request, mock_db_manager
+    ):
+        """Only persistence is non-fatal; a real analysis failure still raises."""
+        analyzer_service.fetcher.http_fetcher.fetch = MagicMock(
+            side_effect=RuntimeError("fetcher exploded")
+        )
+
+        with (
+            patch("src.services.analyzer.get_redis") as mock_get_redis,
+            patch("src.services.analyzer.DomainChecker") as mock_domain_checker_class,
+        ):
+            mock_get_redis.return_value = AsyncMock()
+            mock_domain_checker = AsyncMock()
+            mock_domain_checker.is_whitelisted.return_value = False
+            mock_domain_checker.is_blacklisted.return_value = False
+            mock_domain_checker_class.return_value = mock_domain_checker
+
+            with pytest.raises(RuntimeError, match="fetcher exploded"):
+                await analyzer_service.analyze(
+                    url="https://fetch-explodes.com/login",
+                    request=mock_request,
+                    db_manager=mock_db_manager,
+                )
+
+    @pytest.mark.asyncio
     async def test_ssrf_blocked_returns_blocked_private(
         self, analyzer_service, mock_request, mock_db_manager
     ):
@@ -912,8 +1027,17 @@ class TestAnalyzerService:
                 "src.services.fetchers.http_fetcher.settings.SSRF_GUARD_ENABLED", True
             ),
             patch(
-                "src.services.fetchers.http_fetcher.validate_public_url",
-                side_effect=[True, False],  # initial public, redirect internal
+                "src.services.fetchers.http_fetcher.resolve_public_url",
+                # initial hop public, redirect target internal
+                side_effect=[
+                    ResolvedTarget(
+                        scheme="http",
+                        host="pub.example.com",
+                        port=80,
+                        ips=("93.184.216.34",),
+                    ),
+                    None,
+                ],
             ),
         ):
             mock_get_redis.return_value = AsyncMock()
