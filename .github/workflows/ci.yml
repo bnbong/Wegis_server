@@ -47,4 +47,4 @@ jobs:
           uv run ruff format src tests --check
 
       - name: Run unit and API tests
-        run: ENV_FILE=env.test uv run pytest tests/test_domain_checker.py tests/test_analyzer.py tests/test_api_routes.py tests/test_url_utils.py tests/test_reputation.py tests/test_net_guard.py tests/test_middleware.py tests/test_http_fetcher.py tests/test_auth.py
+        run: ENV_FILE=env.test uv run pytest tests/test_domain_checker.py tests/test_analyzer.py tests/test_api_routes.py tests/test_url_utils.py tests/test_reputation.py tests/test_net_guard.py tests/test_middleware.py tests/test_http_fetcher.py tests/test_browser_fetcher.py tests/test_auth.py tests/test_config.py tests/test_feedback.py

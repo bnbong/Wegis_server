@@ -415,14 +415,25 @@ class AnalyzerService:
 
         # Persist the operational BLOCK decision (not the raw prob>=0.5 positive),
         # so a low-confidence, non-blocked positive is not logged as phishing.
-        await self._persist_result(
-            db_manager=db_manager,
-            url=canonical_url,
-            is_phishing=(severity == "block"),
-            confidence=confidence,
-            html_content=html_content,
-            timer=timer,
-        )
+        #
+        # Persistence (history + cache) is a side effect, never part of the verdict:
+        # a Postgres/Redis hiccup must not turn an already-computed "block" into the
+        # caller's error fallback (result=False / severity="allow"), which would be
+        # a fail-open. Degrade to a log line and return the verdict as computed.
+        try:
+            await self._persist_result(
+                db_manager=db_manager,
+                url=canonical_url,
+                is_phishing=(severity == "block"),
+                confidence=confidence,
+                html_content=html_content,
+                timer=timer,
+            )
+        except Exception as exc:
+            # Close the dangling db_write mark so the perf record keeps the time
+            # spent before the failure instead of reporting 0.
+            timer.stop("db_write")
+            logger.error(f"Failed to persist result for {canonical_url}: {exc}")
 
         self._record_perf(
             url=canonical_url,

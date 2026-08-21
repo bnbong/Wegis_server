@@ -13,7 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from src.core.config import settings
-from src.orm_models import PhishingURL, APIClient
+from src.orm_models import PhishingURL, APIClient, Feedback
 from src.clients.redis import get_redis
 from src.services.url_utils import canonicalize_url
 
@@ -203,5 +203,43 @@ class DBManager:
             session.add(client)
             session.commit()
             return True
+        finally:
+            session.close()
+
+    # User feedback (reported false positives / negatives) operations
+    def save_feedback(
+        self,
+        url: str,
+        client_id_hash: str,
+        reported_verdict: Optional[str] = None,
+        user_label: Optional[str] = None,
+        context: Optional[str] = None,
+        ext_version: Optional[str] = None,
+    ) -> None:
+        """Append one user feedback report to the review queue.
+
+        Always inserted with the default review_status="pending". Reports are
+        never applied to the blacklist/whitelist here — see orm_models.Feedback
+        for why user-controlled input stays out of the verdict path.
+        """
+        session = self.get_postgres_session()
+        try:
+            session.add(
+                Feedback(
+                    url=url,
+                    client_id_hash=client_id_hash,
+                    reported_verdict=reported_verdict,
+                    user_label=user_label,
+                    context=context,
+                    ext_version=ext_version,
+                )
+            )
+            session.commit()
+        except Exception as e:
+            # No URL in the log line: a reported URL can carry sensitive query
+            # strings.
+            session.rollback()
+            logger.error(f"Error saving feedback report: {e}")
+            raise
         finally:
             session.close()

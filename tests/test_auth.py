@@ -39,6 +39,12 @@ class TestBootstrapOk:
             assert auth_tokens.bootstrap_ok("nope") is False
             assert auth_tokens.bootstrap_ok(None) is False
 
+    def test_non_ascii_input_rejected(self):
+        # compare_digest refuses non-ASCII str; header values can carry it, so a
+        # bytes comparison must reject rather than raise.
+        with patch.object(settings, "REGISTRATION_BOOTSTRAP_SECRET", "s3cret"):
+            assert auth_tokens.bootstrap_ok("s3crét") is False
+
 
 class TestIsTokenValid:
     @pytest.mark.asyncio
@@ -114,6 +120,19 @@ class TestRegisterEndpoint:
         ):
             r = client.post(
                 "/auth/register", json={}, headers={"X-Wegis-Bootstrap": "wrong"}
+            )
+        assert r.status_code == 401
+
+    def test_non_ascii_bootstrap_rejected(self):
+        # A latin-1 header value must come back 401, not a 500 from the route.
+        with (
+            patch.object(settings, "AUTH_MODE", "registration"),
+            patch.object(settings, "REGISTRATION_BOOTSTRAP_SECRET", "s3cret"),
+        ):
+            r = client.post(
+                "/auth/register",
+                json={},
+                headers={"X-Wegis-Bootstrap": "s3crét".encode("latin-1")},
             )
         assert r.status_code == 401
 

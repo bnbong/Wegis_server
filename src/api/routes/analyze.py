@@ -94,12 +94,30 @@ async def check_url(
     Single URL phishing detection endpoint
     """
     analyzer = getattr(request.app.state, "analyzer_service", None) or AnalyzerService()
-    result = await analyzer.analyze(
-        url=request_data.url,
-        request=request,
-        db_manager=db_manager,
-        context=request_data.context,
-    )
+    try:
+        result = await analyzer.analyze(
+            url=request_data.url,
+            request=request,
+            db_manager=db_manager,
+            context=request_data.context,
+        )
+    except HTTPException:
+        # Deliberate status codes stay intact; FastAPI renders them.
+        raise
+    except Exception as exc:
+        # An unhandled analyzer failure (browser startup, timeout, model, persist)
+        # must not surface as a 500. Mirror the batch endpoint's error shape so
+        # the client keeps a valid contract to act on.
+        logger.error(f"Error analyzing URL {request_data.url}: {exc}")
+        result = PhishingDetectionResponse(
+            url=request_data.url,
+            result=False,
+            confidence=0.0,
+            source="error",
+            fetch_mode="none",
+            severity="allow",
+            status="final",
+        )
 
     response: ResponseSchema[PhishingDetectionResponse] = ResponseSchema(
         timestamp=datetime.now().isoformat(),
@@ -175,7 +193,12 @@ async def check_urls_batch(
         )
 
     processed_results: List[PhishingDetectionResponse] = []
-    for url in urls:
+    for idx, url in enumerate(urls):
+        # The cap is positional: a slot past the cap is never analyzed, even when
+        # the same URL string was analyzed at an earlier (in-cap) position.
+        if idx >= settings.MAX_BATCH_URLS:
+            processed_results.append(_placeholder(url))
+            continue
         processed_results.append(result_map.get(url) or _placeholder(url))
 
     response: ResponseSchema[List[PhishingDetectionResponse]] = ResponseSchema(

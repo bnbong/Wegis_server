@@ -76,17 +76,30 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-if settings.all_cors_origins:
+# Concurrency cap + rate limiting + optional token auth (fail-open; /analyze
+# and /feedback only).
+register_middleware(app)
+
+# ORDER MATTERS — CORS must be registered AFTER register_middleware().
+# Starlette runs the LAST-registered middleware outermost, so registering CORS
+# first would leave auth outside it, and a preflight OPTIONS (which carries no
+# X-Wegis-Token) would be answered 401 while also burning the caller's
+# auth-failure budget. Outermost CORS short-circuits the preflight and puts CORS
+# headers on 401/429 responses too, so the extension can read the status code
+# instead of seeing an opaque network error.
+if settings.all_cors_origins or settings.CORS_ORIGIN_REGEX:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.all_cors_origins,
+        allow_origin_regex=settings.CORS_ORIGIN_REGEX or None,
         allow_credentials=True,
         allow_methods=["*"],
-        allow_headers=["*"],
+        # Named rather than "*": with allow_credentials=True Starlette answers a
+        # "*" allowance by mirroring whatever the preflight asked for, so the
+        # wildcard buys nothing and hides what is actually accepted. This list is
+        # the client contract (Content-Type, X-Wegis-Token, Accept).
+        allow_headers=["Accept", "Content-Type", "X-Wegis-Token"],
     )
-
-# Concurrency cap + rate limiting + optional token auth (fail-open, /analyze only).
-register_middleware(app)
 
 
 app.include_router(api_router)
